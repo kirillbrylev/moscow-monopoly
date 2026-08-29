@@ -299,16 +299,15 @@ function renderLobbySeats() {
   const root = seatsRoot();
   if (!root) return;
   root.innerHTML = PLAYER_CATALOG.map((seat) => {
-    const checked = seat.required || seat.defaultOn !== false;
-    const you = seat.required ? '<span class="lobby-seat__you">это вы</span>' : '';
+    const checked = seat.defaultOn !== false;
     return `
       <label class="lobby-seat">
         <span class="lobby-seat__token" style="--seat-color:${seat.color}">${seat.token}</span>
         <span class="lobby-seat__body">
-          <span class="lobby-seat__name">${seat.name}${you}</span>
+          <span class="lobby-seat__name">${seat.name}</span>
           <span class="lobby-seat__blurb">${seat.blurb}</span>
         </span>
-        <input type="checkbox" data-seat-key="${seat.key}" ${checked ? 'checked' : ''} ${seat.required ? 'disabled' : ''}>
+        <input type="checkbox" data-seat-key="${seat.key}" ${checked ? 'checked' : ''}>
       </label>
     `;
   }).join('');
@@ -317,7 +316,6 @@ function renderLobbySeats() {
 function collectLobbyRoster() {
   const root = seatsRoot();
   return PLAYER_CATALOG.filter((seat) => {
-    if (seat.required) return true;
     const input = root?.querySelector(`[data-seat-key="${seat.key}"]`);
     return Boolean(input?.checked);
   }).map((seat, id) => ({
@@ -364,10 +362,20 @@ function beginMatch(roster) {
   persistGame('Новая игра сохранена');
 }
 
+function showLobbyError(message) {
+  if (!lobbyErrorEl) return;
+  lobbyErrorEl.textContent = message;
+  lobbyErrorEl.hidden = false;
+}
+
 function handleStartGame() {
   const roster = collectLobbyRoster();
+  if (!roster.some((player) => !player.isBot)) {
+    showLobbyError('Нужен хотя бы один человек: Кирилл или Артём.');
+    return;
+  }
   if (roster.length < 2) {
-    if (lobbyErrorEl) lobbyErrorEl.hidden = false;
+    showLobbyError('Нужно хотя бы двое игроков. Добавьте бота или второго человека.');
     return;
   }
   try {
@@ -725,9 +733,9 @@ function getActivePlayer() {
 }
 
 function updateBank() {
-  bankTotalEl.textContent = formatMoney(state.bank.money);
-  bankHousesEl.textContent = String(state.bank.houses);
-  bankHotelsEl.textContent = String(state.bank.hotels);
+  if (bankTotalEl) bankTotalEl.textContent = formatMoney(state.bank.money);
+  if (bankHousesEl) bankHousesEl.textContent = String(state.bank.houses);
+  if (bankHotelsEl) bankHotelsEl.textContent = String(state.bank.hotels);
 }
 
 function updateActionButtons() {

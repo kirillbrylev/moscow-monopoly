@@ -1630,8 +1630,8 @@ body {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  min-height: 280px;
-  max-height: min(58vh, 560px);
+  min-height: 320px;
+  max-height: min(68vh, 640px);
 }
 
 .commentary-feed {

@@ -79,17 +79,6 @@
       </section>
 
       <aside class="info-panel">
-        <h2 class="panel-title">Банк</h2>
-        <div class="bank-card">
-          <div class="bank-card__icon">🏦</div>
-          <div class="bank-card__amount">₽ <span id="bank-total">20 000</span></div>
-          <div class="bank-card__supply">
-            <span>🏠 <strong id="bank-houses">32</strong></span>
-            <span>🏨 <strong id="bank-hotels">12</strong></span>
-          </div>
-          <p class="bank-card__note">Стартовый капитал каждого игрока — ₽ 1 500</p>
-        </div>
-
         <div class="commentary-panel">
           <div class="commentary-feed" id="commentary-feed" aria-live="polite"></div>
           <form class="commentary-compose" id="commentary-form">
@@ -105,17 +94,6 @@
         <div class="property-preview" id="property-preview">
           <div class="property-preview__empty">Наведите на клетку или сделайте ход</div>
         </div>
-
-        <h2 class="panel-title">Купюры</h2>
-        <div class="money-stack">
-          <div class="bill bill--500"><span>500</span></div>
-          <div class="bill bill--100"><span>100</span></div>
-          <div class="bill bill--50"><span>50</span></div>
-          <div class="bill bill--20"><span>20</span></div>
-          <div class="bill bill--10"><span>10</span></div>
-          <div class="bill bill--5"><span>5</span></div>
-          <div class="bill bill--1"><span>1</span></div>
-        </div>
       </aside>
     </main>
   </div>
@@ -128,21 +106,21 @@
     <div class="lobby" role="dialog" aria-modal="true" aria-labelledby="lobby-title">
       <p class="lobby__kicker">Монополия · Москва</p>
       <h2 class="lobby__title" id="lobby-title">Кто за столом?</h2>
-      <p class="lobby__lead">Отметьте, с кем играть. Нужно минимум двое. Кирилл — вы; Артём, Март, Лох и Мирон отмечены по умолчанию.</p>
+      <p class="lobby__lead">Отметьте, с кем играть. Нужны минимум двое и хотя бы один человек. Можно одному за Кирилла или за Артёма — второго человека снимите.</p>
       <div class="lobby__seats" id="lobby-seats">
         <label class="lobby-seat">
           <span class="lobby-seat__token" style="--seat-color:#E53935">🚗</span>
           <span class="lobby-seat__body">
             <span class="lobby-seat__name">Кирилл</span>
-            <span class="lobby-seat__blurb">это вы</span>
+            <span class="lobby-seat__blurb">человек · можно снять</span>
           </span>
-          <input type="checkbox" data-seat-key="human1" checked disabled>
+          <input type="checkbox" data-seat-key="human1" checked>
         </label>
         <label class="lobby-seat">
           <span class="lobby-seat__token" style="--seat-color:#1E88E5">🎩</span>
           <span class="lobby-seat__body">
             <span class="lobby-seat__name">Артём</span>
-            <span class="lobby-seat__blurb">второй человек за тем же экраном</span>
+            <span class="lobby-seat__blurb">человек · можно одному, без Кирилла</span>
           </span>
           <input type="checkbox" data-seat-key="human2" checked>
         </label>
