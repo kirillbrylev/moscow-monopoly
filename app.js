@@ -353,6 +353,7 @@ function beginMatch(roster) {
   hideLobby();
   matchActive = true;
   botRunning = false;
+  if (tokensLayerEl) tokensLayerEl.innerHTML = '';
   applyState(freshState(roster));
   setDieRotation(0, 1, false);
   setDieRotation(1, 1, false);
@@ -524,18 +525,24 @@ function ensureTokenElements() {
 
   state.players.forEach((player) => {
     let tokenEl = tokensLayerEl.querySelector(`[data-player-id="${player.id}"]`);
-    if (tokenEl) return;
+    if (!tokenEl) {
+      tokenEl = document.createElement('div');
+      tokenEl.className = 'token';
+      tokenEl.dataset.playerId = String(player.id);
+      tokenEl.innerHTML = `
+        <div class="token__pawn"><span class="token__icon"></span></div>
+        <div class="token__base"></div>
+        <div class="token__label"></div>
+      `;
+      tokensLayerEl.appendChild(tokenEl);
+    }
 
-    tokenEl = document.createElement('div');
-    tokenEl.className = 'token';
-    tokenEl.dataset.playerId = String(player.id);
     tokenEl.style.setProperty('--token-color', player.color);
-    tokenEl.innerHTML = `
-      <div class="token__pawn"><span class="token__icon">${player.token}</span></div>
-      <div class="token__base"></div>
-      <div class="token__label">${player.name}</div>
-    `;
-    tokensLayerEl.appendChild(tokenEl);
+    const icon = tokenEl.querySelector('.token__icon');
+    const label = tokenEl.querySelector('.token__label');
+    if (icon) icon.textContent = player.token;
+    if (label) label.textContent = player.name;
+    tokenEl.title = player.name;
   });
 }
 
