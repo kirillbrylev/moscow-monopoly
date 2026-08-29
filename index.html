@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Монополия — Москва</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=PT+Serif:wght@700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header__brand">
+        <span class="header__logo">М</span>
+        <div>
+          <h1>Монополия</h1>
+          <p class="header__subtitle">Московское издание</p>
+        </div>
+      </div>
+      <div class="header__save">
+        <button class="btn-save" id="save-btn" type="button">Сохранить игру</button>
+        <button class="btn-save btn-save--ghost" id="new-game-btn" type="button">Новая игра</button>
+        <span class="header__save-status" id="save-status">Пока нет сохранения</span>
+      </div>
+      <div class="header__turn">
+        <span class="header__turn-label">Ход игрока</span>
+        <span class="header__turn-player" id="active-player-name">Кирилл</span>
+      </div>
+    </header>
+
+    <main class="game-layout">
+      <aside class="players-panel">
+        <h2 class="panel-title">Игроки</h2>
+        <p class="players-panel__hint" id="players-hint">Мирон ходит сам, как Март и Лох.</p>
+        <div id="player-cards" class="player-cards"></div>
+      </aside>
+
+      <section class="board-section">
+        <div class="board-wrapper">
+          <div id="board" class="board"></div>
+          <div id="tokens-layer" class="tokens-layer" aria-hidden="true"></div>
+          <div class="board-center">
+            <div class="board-center__logo">
+              <span class="board-center__m">М</span>
+              <span class="board-center__text">ОНОПОЛИЯ</span>
+              <span class="board-center__city">Москва</span>
+            </div>
+
+            <div class="dice-stage">
+              <div class="dice-area">
+                <div class="die die--white" id="dice-1" aria-label="Кубик 1"></div>
+                <div class="die die--red" id="dice-2" aria-label="Кубик 2"></div>
+              </div>
+              <div class="dice-readout" id="dice-readout">
+                <span class="dice-readout__value" id="die-value-1">—</span>
+                <span class="dice-readout__op">+</span>
+                <span class="dice-readout__value" id="die-value-2">—</span>
+                <span class="dice-readout__op">=</span>
+                <span class="dice-readout__total" id="dice-total">—</span>
+              </div>
+            </div>
+
+            <button class="btn-roll" id="roll-btn" type="button">
+              <span class="btn-roll__icon">🎲</span>
+              <span id="roll-btn-label">Бросить кубики</span>
+            </button>
+
+            <div class="turn-actions" id="turn-actions">
+              <button class="btn-action" id="manage-btn" type="button">Дома и залог</button>
+              <button class="btn-action" id="trade-btn" type="button">Торговля</button>
+              <button class="btn-action btn-action--end" id="end-turn-btn" type="button" hidden>Закончить ход</button>
+            </div>
+
+            <p class="game-log" id="game-log">За столом Кирилл, Артём, Лох, Март и Мирон. Боты ходят сами и комментируют решения.</p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="info-panel">
+        <h2 class="panel-title">Банк</h2>
+        <div class="bank-card">
+          <div class="bank-card__icon">🏦</div>
+          <div class="bank-card__amount">₽ <span id="bank-total">20 000</span></div>
+          <div class="bank-card__supply">
+            <span>🏠 <strong id="bank-houses">32</strong></span>
+            <span>🏨 <strong id="bank-hotels">12</strong></span>
+          </div>
+          <p class="bank-card__note">Стартовый капитал каждого игрока — ₽ 1 500</p>
+        </div>
+
+        <div class="commentary-panel">
+          <div class="commentary-feed" id="commentary-feed" aria-live="polite"></div>
+          <form class="commentary-compose" id="commentary-form">
+            <div class="commentary-compose__who" id="commentary-speaker-row" hidden></div>
+            <div class="commentary-compose__row">
+              <input class="commentary-compose__input" id="commentary-input" type="text" maxlength="160" autocomplete="off" placeholder="Написать в чат…" disabled>
+              <button class="commentary-compose__send" id="commentary-send" type="submit" disabled>Отправить</button>
+            </div>
+          </form>
+        </div>
+
+        <h2 class="panel-title">Карточка клетки</h2>
+        <div class="property-preview" id="property-preview">
+          <div class="property-preview__empty">Наведите на клетку или сделайте ход</div>
+        </div>
+
+        <h2 class="panel-title">Купюры</h2>
+        <div class="money-stack">
+          <div class="bill bill--500"><span>500</span></div>
+          <div class="bill bill--100"><span>100</span></div>
+          <div class="bill bill--50"><span>50</span></div>
+          <div class="bill bill--20"><span>20</span></div>
+          <div class="bill bill--10"><span>10</span></div>
+          <div class="bill bill--5"><span>5</span></div>
+          <div class="bill bill--1"><span>1</span></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="modal-overlay" id="modal-overlay" hidden>
+    <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div class="lobby-overlay" id="lobby-overlay">
+    <div class="lobby" role="dialog" aria-modal="true" aria-labelledby="lobby-title">
+      <p class="lobby__kicker">Монополия · Москва</p>
+      <h2 class="lobby__title" id="lobby-title">Кто за столом?</h2>
+      <p class="lobby__lead">Отметьте, с кем играть. Нужно минимум двое. Кирилл — вы; Артём, Март, Лох и Мирон отмечены по умолчанию.</p>
+      <div class="lobby__seats" id="lobby-seats">
+        <label class="lobby-seat">
+          <span class="lobby-seat__token" style="--seat-color:#E53935">🚗</span>
+          <span class="lobby-seat__body">
+            <span class="lobby-seat__name">Кирилл</span>
+            <span class="lobby-seat__blurb">это вы</span>
+          </span>
+          <input type="checkbox" data-seat-key="human1" checked disabled>
+        </label>
+        <label class="lobby-seat">
+          <span class="lobby-seat__token" style="--seat-color:#1E88E5">🎩</span>
+          <span class="lobby-seat__body">
+            <span class="lobby-seat__name">Артём</span>
+            <span class="lobby-seat__blurb">второй человек за тем же экраном</span>
+          </span>
+          <input type="checkbox" data-seat-key="human2" checked>
+        </label>
+        <label class="lobby-seat">
+          <span class="lobby-seat__token" style="--seat-color:#8E24AA">🐈‍⬛</span>
+          <span class="lobby-seat__body">
+            <span class="lobby-seat__name">Март</span>
+            <span class="lobby-seat__blurb">кот · везучий и глупый</span>
+          </span>
+          <input type="checkbox" data-seat-key="mart" checked>
+        </label>
+        <label class="lobby-seat">
+          <span class="lobby-seat__token" style="--seat-color:#00897B">🦆</span>
+          <span class="lobby-seat__body">
+            <span class="lobby-seat__name">Лох</span>
+            <span class="lobby-seat__blurb">утка · умный, очень невезучий</span>
+          </span>
+          <input type="checkbox" data-seat-key="lokh" checked>
+        </label>
+        <label class="lobby-seat">
+          <span class="lobby-seat__token" style="--seat-color:#EF6C00">🦉</span>
+          <span class="lobby-seat__body">
+            <span class="lobby-seat__name">Мирон</span>
+            <span class="lobby-seat__blurb">сова · спокойный, ходит сам</span>
+          </span>
+          <input type="checkbox" data-seat-key="miron" checked>
+        </label>
+      </div>
+      <p class="lobby__error" id="lobby-error" hidden>Нужно хотя бы двое игроков.</p>
+      <div class="lobby__actions">
+        <button class="btn-ghost" id="continue-btn" type="button" hidden>Продолжить</button>
+        <button class="btn-roll" id="start-game-btn" type="button">Начать игру</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
