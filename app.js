@@ -3217,11 +3217,14 @@ async function runAuction(cell) {
   let currentBid = 0;
   let leaderId = null;
   const passed = new Set();
+  const spoken = new Set();
   const starterId = getActivePlayer().id;
   let turnIndex = bidders.findIndex((player) => player.id === starterId);
   turnIndex = (Math.max(turnIndex, 0) + 1) % bidders.length;
+  let rounds = 0;
 
-  while (true) {
+  while (rounds < 80) {
+    rounds += 1;
     if (passed.size === bidders.length) break;
     if (leaderId != null && bidders.every((player) => player.id === leaderId || passed.has(player.id))) break;
 
@@ -3239,16 +3242,15 @@ async function runAuction(cell) {
     }
 
     if (isBot(player)) {
-      const maxBid = isUnluckySmart(player)
-        ? martMaxBid(player, cell)
-        : isMiron(player)
-          ? mironMaxBid(player, cell)
-          : lokhMaxBid(player, cell);
-      const raise = minBid <= maxBid && player.money >= minBid;
-      addComment(player, auctionThought(player, cell, raise));
+      const maxBid = Math.min(botMaxBid(player, cell), player.money);
+      const raise = minBid <= maxBid;
+      if (!spoken.has(player.id)) {
+        addComment(player, auctionThought(player, cell, raise));
+        spoken.add(player.id);
+      }
       await botSleep(isLuckyFool(player) ? 800 : 350);
       if (raise) {
-        currentBid = minBid;
+        currentBid = maxBid;
         leaderId = player.id;
       } else {
         passed.add(player.id);
