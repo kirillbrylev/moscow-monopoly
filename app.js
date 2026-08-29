@@ -52,6 +52,8 @@ let botRunning = false;
 let matchActive = false;
 const logHistory = [];
 const commentHistory = [];
+let usedMartLines = [];
+let botTurnBad = false;
 const COMMENT_LIMIT = 40;
 const BOT_PACE = 2;
 const recentHumanReactions = [];
@@ -82,7 +84,6 @@ const modalEl = document.getElementById('modal');
 const saveBtn = document.getElementById('save-btn');
 const newGameBtn = document.getElementById('new-game-btn');
 const saveStatusEl = document.getElementById('save-status');
-const playersHintEl = document.getElementById('players-hint');
 const lobbyOverlayEl = document.getElementById('lobby-overlay');
 const lobbySeatsEl = document.getElementById('lobby-seats') || document.getElementById('lobby-players');
 const lobbyErrorEl = document.getElementById('lobby-error');
@@ -166,6 +167,7 @@ function persistGame(message) {
       savedAt: Date.now(),
       log: gameLogEl.textContent,
       comments: commentHistory.slice(),
+      usedMartLines: usedMartLines.slice(),
       lastDice: state.lastDice,
       lastDiceTotal: state.lastDiceTotal,
       game: {
@@ -239,6 +241,7 @@ function restoreFromSnapshot(snapshot) {
 
   migrateHumanNames(state.players);
   restoreComments(snapshot.comments || game.comments);
+  usedMartLines = Array.isArray(snapshot.usedMartLines) ? snapshot.usedMartLines.slice() : [];
   ensureMironInRoster(snapshot);
 
   if (state.decks.chance.length + state.discards.chance.length < 8) {
@@ -355,6 +358,8 @@ function beginMatch(roster) {
   setDieRotation(1, 1, false);
   setDiceReadout(null, null);
   clearComments();
+  usedMartLines = [];
+  botTurnBad = false;
   clearLog(tableWelcome(roster.map((player) => player.name)));
   skipNextHumanComment = false;
   chatSpeakerId = humanPlayers()[0]?.id ?? 0;
@@ -758,7 +763,6 @@ function updateActionButtons() {
 
 function refreshUI() {
   renderPlayerCards();
-  updatePlayersHint();
   updateBoardOverlays();
   updateBank();
   updateActionButtons();
@@ -1029,81 +1033,190 @@ function pushComment(player, text, options = {}) {
   if (options.echoLog && talksInCharacter(player)) {
     setLog(`${player.name}: «${text}»`);
   }
-  if (options.flavor && talksInCharacter(player)) {
-    maybeMartGross(player);
-    maybeLokhStory(player);
-  }
 }
 
 function addComment(player, text) {
   if (!player || !text || !talksInCharacter(player)) return;
-  pushComment(player, text, { echoLog: true, flavor: true });
+  if (isLuckyFool(player) || isUnluckySmart(player)) return;
+  pushComment(player, text, { echoLog: true });
 }
 
-function martGrossLine() {
-  const lines = [
-    'Ой. Я пукнул.',
-    'Пукнул. Извините. Или нет.',
-    'Кажется, пукнул. Пахнет победой.',
-    'Блеванул чуть-чуть. Нормально же?',
-    'Меня стошнило. Но кубики мои.',
-    'Пук. Продолжаем.',
-    'Блевать охота. Беру ещё улицу потом.',
-  ];
-  return lines[Math.floor(Math.random() * lines.length)];
-}
+const MART_SOUND_FILES = {
+  fart: 'sounds/fart.mp3',
+  vomit: 'sounds/vomit.mp3',
+  purr: 'sounds/purr.wav',
+  yowl: 'sounds/yowl.mp3',
+  diarrhea: 'sounds/diarrhea.mp3',
+};
 
-function maybeMartGross(player) {
-  if (!isLuckyFool(player) || Math.random() > 0.22) return;
-  if (commentHistory[commentHistory.length - 1]?.text?.includes('пук')
-    || commentHistory[commentHistory.length - 1]?.text?.includes('Блев')
-    || commentHistory[commentHistory.length - 1]?.text?.includes('стошн')) {
-    return;
+const MART_OK_LINES = [
+  'Мурр. Пока миска на месте.',
+  'Можно считать, что повезло. Я так и считаю.',
+  'Пук. Это у меня похвала.',
+  'Ход съедобный. Почти как рыба.',
+  'Никто не орёт. Значит, хорошо.',
+  'Кубики меня любят. Иногда даже взаимно.',
+  'Я ничего не понял, но вроде не больно.',
+  'Живот спокоен. Редкость и праздник.',
+  'Если не наступили на хвост — день удался.',
+  'Блестело, я подошёл. Пока не жалею.',
+  'Можно ещё раз так же. Я не против.',
+  'Лежу внутри себя и мурчу.',
+  'Кажется, я умный. Кажется.',
+  'Пол не кусается. Иду дальше.',
+  'Мне тепло. Даже без батареи.',
+  'Кубик мой друг. Сегодня точно.',
+  'Ничего не сломалось. Почти победа.',
+  'Я кот. Мне можно радоваться просто так.',
+  'Пахнет не бедой. Уже победа.',
+  'Лапы целы. Хвост тоже. Мурр.',
+  'Если это стратегия — она вкусная.',
+  'Я бы хлопнул, но пукнул. Близко.',
+  'Солнце, кубики, я. Нормально.',
+  'Можно мурчать на всю Москву.',
+  'Никто не забрал мой кусок поля. Пока.',
+  'Хороший ход для кота с одним мозгом.',
+  'Я доволен и слегка круглый.',
+  'Мир не упал. Можно дремать.',
+  'Удача села рядом и замурчала.',
+  'Если б была сметана — я бы её тоже взял.',
+  'Иду как будто знаю зачем.',
+  'Тихий ход. Мой любимый жанр.',
+  'Даже пылинка не против меня.',
+  'Кот доволен. Остальные потом.',
+  'Это было почти умно. Не повторяйте.',
+  'Мурлыкаю, потому что могу.',
+];
+
+const MART_BAD_LINES = [
+  'Ай! Хвост! Кто наступил?!',
+  'Всё. Живот объявил войну.',
+  'Больно и обидно. В основном больно.',
+  'Кот хочет назад в коробку.',
+  'Это не ход. Это засада.',
+  'Хвост пищит. Я тоже.',
+  'Понос настроения. И не только.',
+  'Кубики предали. Как всегда в плохой день.',
+  'Уберите ногу с хвоста. Срочно.',
+  'Мне плохо. И полю тоже, наверное.',
+  'Кот орёт, потому что жизнь орёт первой.',
+  'Зачем я встал с батареи.',
+  'Боль. Короткая. Громкая.',
+  'Живот снизу всё рассказал за меня.',
+  'Это было против шерсти.',
+  'Я везучий, но не сегодня. Сегодня хвост.',
+  'Неудача пахнет. Сильно.',
+  'Можно я просто лягу и не буду.',
+  'Ауч. Коту не объяснили правила.',
+  'Ход как на хвост. Прямо туда.',
+  'Вселенная наступила и даже не извинилась.',
+  'Крикнул. Имел право.',
+  'Плохое место для кота и для живота.',
+  'Шерсть дыбом. Это диагноз.',
+];
+
+const martSoundPlayers = {};
+let martSoundTimer = 0;
+
+function getMartSound(name) {
+  if (!martSoundPlayers[name]) {
+    const audio = new Audio(MART_SOUND_FILES[name]);
+    audio.preload = 'auto';
+    martSoundPlayers[name] = audio;
   }
-  const line = martGrossLine();
-  commentHistory.push({
-    name: player.name,
-    color: player.color,
-    text: line,
-    kind: player.botKind || 'bot',
+  return martSoundPlayers[name];
+}
+
+function preloadMartSounds() {
+  Object.keys(MART_SOUND_FILES).forEach((name) => getMartSound(name));
+}
+
+function playMartClip(name, maxMs) {
+  Object.values(martSoundPlayers).forEach((audio) => {
+    audio.pause();
+    audio.currentTime = 0;
   });
-  if (commentHistory.length > COMMENT_LIMIT) commentHistory.shift();
-  renderCommentary();
-  setLog(`${player.name}: «${line}»`);
-}
-
-function lokhLifeStory() {
-  const lines = [
-    'Вчера кошелёк выпал в лужу. Купюры ещё плывут, я уже нет.',
-    'На работе премию перепутали: отдали соседу по фамилии. Я посчитал таблицу — всё равно мне ноль.',
-    'Купил акции «наверняка». Через час они стоили как трамвайный билет.',
-    'Таксист объехал пробку через весь город. Счётчик честный. Я — нет.',
-    'Банкомат съел карту, потом выдал чек: «спасибо за пожертвование».',
-    'Страховка не покрыла потоп: «утка не является страховым случаем».',
-    'Выиграл в лотерею десять рублей. Билет стоил триста.',
-    'Долг вернули — чужими деньгами, фальшивыми. Я это сразу посчитал. Поздно.',
-    'В детстве копилка упала в канализацию. С тех пор так и живём.',
-    'Три раза подряд выбирал короткую очередь. Все три кассы закрылись передо мной.',
-  ];
-  return lines[Math.floor(Math.random() * lines.length)];
-}
-
-function maybeLokhStory(player) {
-  if (!isUnluckySmart(player) || Math.random() > 0.2) return;
-  const last = commentHistory[commentHistory.length - 1]?.text || '';
-  if (last.includes('кошел') || last.includes('преми') || last.includes('акци') || last.includes('Банкомат') || last.includes('копилк')) {
-    return;
+  window.clearTimeout(martSoundTimer);
+  const audio = getMartSound(name);
+  audio.volume = name === 'purr' ? 0.8 : 0.92;
+  const started = audio.play();
+  if (started?.catch) started.catch(() => {});
+  if (maxMs) {
+    martSoundTimer = window.setTimeout(() => {
+      audio.pause();
+      audio.currentTime = 0;
+    }, maxMs);
   }
-  const line = lokhLifeStory();
-  commentHistory.push({
-    name: player.name,
-    color: player.color,
-    text: line,
-    kind: player.botKind || 'bot',
-  });
-  if (commentHistory.length > COMMENT_LIMIT) commentHistory.shift();
-  renderCommentary();
-  setLog(`${player.name}: «${line}»`);
+}
+
+function markBotTurnBad(player) {
+  if (isLuckyFool(player) || isUnluckySmart(player)) botTurnBad = true;
+}
+
+function pickUnusedMartLine(bad) {
+  const pool = bad ? MART_BAD_LINES : MART_OK_LINES;
+  const left = pool.filter((line) => !usedMartLines.includes(line));
+  const line = (left.length ? left : pool)[Math.floor(Math.random() * (left.length || pool.length))];
+  usedMartLines.push(line);
+  return line;
+}
+
+const LOKH_BAD_LINES = [
+  'я неудачник',
+  'вот я лох',
+  'вот я лузер',
+  'повезло не мне',
+  'всем везет но не мне',
+];
+
+function finishMartTurn(player) {
+  if (!isLuckyFool(player)) return;
+  const bad = botTurnBad || player.bankrupt;
+  pushComment(player, pickUnusedMartLine(bad), { echoLog: false });
+  if (bad) {
+    playMartClip(Math.random() < 0.5 ? 'yowl' : 'diarrhea');
+  } else {
+    const roll = Math.random();
+    if (roll < 0.34) playMartClip('fart');
+    else if (roll < 0.67) playMartClip('vomit');
+    else playMartClip('purr', 2800);
+  }
+}
+
+function pickRussianVoice() {
+  const voices = window.speechSynthesis?.getVoices?.() || [];
+  return voices.find((voice) => /^ru/i.test(voice.lang))
+    || voices.find((voice) => /russian|русск/i.test(voice.name))
+    || null;
+}
+
+function unlockSpeech() {
+  const synth = window.speechSynthesis;
+  if (!synth) return;
+  const warm = new SpeechSynthesisUtterance(' ');
+  warm.volume = 0;
+  synth.speak(warm);
+}
+
+function speakText(text) {
+  const synth = window.speechSynthesis;
+  if (!synth) return;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'ru-RU';
+  utter.rate = 0.95;
+  utter.pitch = 0.75;
+  const voice = pickRussianVoice();
+  if (voice) utter.voice = voice;
+  synth.cancel();
+  window.setTimeout(() => synth.speak(utter), 40);
+}
+
+function finishLokhTurn(player) {
+  if (!isUnluckySmart(player)) return;
+  if (!(botTurnBad || player.bankrupt)) return;
+  const line = LOKH_BAD_LINES[Math.floor(Math.random() * LOKH_BAD_LINES.length)];
+  pushComment(player, line, { echoLog: false });
+  speakText(line);
 }
 
 function clearComments() {
@@ -1190,16 +1303,6 @@ function ensureMironInRoster(snapshot) {
   }
 }
 
-function updatePlayersHint() {
-  if (!playersHintEl) return;
-  const names = formatNameList(state.players.map((player) => player.name));
-  const talkers = state.players.filter((player) => talksInCharacter(player)).map((player) => player.name);
-  const commentHint = talkers.length
-    ? ` Реплики ${formatNameList(talkers)} — справа и в журнале на поле.`
-    : '';
-  playersHintEl.textContent = `За столом ${names}.${commentHint}`;
-}
-
 function botTurnAlive(gen, player) {
   return gameGen === gen && getActivePlayer() === player && !player.bankrupt && state.winnerId == null;
 }
@@ -1263,16 +1366,8 @@ function martWantsOutOfJail(player) {
 }
 
 async function botThink(player, message) {
-  if (message) addComment(player, message);
-  if (isLuckyFool(player)) {
-    if (Math.random() < 0.28) addComment(player, martGrossLine());
-    await botSleep(2000);
-    return;
-  }
-  if (isUnluckySmart(player) && Math.random() < 0.3) {
-    addComment(player, lokhLifeStory());
-  }
-  await botSleep(isMiron(player) ? 520 : 600);
+  if (message && isMiron(player)) addComment(player, message);
+  await botSleep(isLuckyFool(player) ? 900 : isMiron(player) ? 520 : 400);
 }
 
 function talkingBots() {
@@ -1669,7 +1764,9 @@ async function botsReact(event) {
   skipNextHumanComment = !skipNextHumanComment;
   if (skipNextHumanComment) return;
 
-  const bots = talkingBots().sort(() => Math.random() - 0.5);
+  const bots = talkingBots()
+    .filter((bot) => !isLuckyFool(bot) && !isUnluckySmart(bot))
+    .sort(() => Math.random() - 0.5);
   const bot = bots[0];
   if (!bot) return;
   const line = reactionLine(bot, event);
@@ -2113,6 +2210,7 @@ async function handleBotJailTurn(player) {
   }
 
   player.jailTurns += 1;
+  markBotTurnBad(player);
   setLog(`${player.name} не выбил дубль и остаётся в тюрьме (${player.jailTurns} из 3).`);
   return 'stay';
 }
@@ -2145,6 +2243,7 @@ async function runBotTurn() {
 
   botRunning = true;
   updateActionButtons();
+  botTurnBad = false;
 
   try {
     if (player.inJail && state.turnPhase === 'pre-roll') {
@@ -2180,7 +2279,10 @@ async function runBotTurn() {
     refreshUI();
   }
 
-  if (gameGen !== gen || state.winnerId != null) return;
+  if (gameGen !== gen) return;
+  finishMartTurn(player);
+  finishLokhTurn(player);
+  if (state.winnerId != null) return;
   if (getActivePlayer() !== player) return;
   if (!isBot(player)) return;
   if (botShouldFinishTurn(player)) {
@@ -2502,6 +2604,7 @@ async function declareBankruptcy(player, creditor) {
 
 async function forcePay(player, amount, creditor, reason) {
   if (amount <= 0 || player.bankrupt) return false;
+  markBotTurnBad(player);
 
   if (player.money >= amount) {
     if (creditor) payBetween(player, creditor, amount);
@@ -3242,6 +3345,7 @@ async function movePlayerSteps(player, steps) {
 }
 
 async function sendToJail(player) {
+  markBotTurnBad(player);
   player.position = JAIL_POSITION;
   player.inJail = true;
   player.jailTurns = 0;
@@ -3676,6 +3780,11 @@ function init() {
   lobbySeatsEl?.addEventListener('change', () => {
     if (lobbyErrorEl) lobbyErrorEl.hidden = true;
   });
+  window.addEventListener('pointerdown', () => {
+    unlockSpeech();
+    preloadMartSounds();
+  }, { once: true });
+  window.speechSynthesis?.addEventListener?.('voiceschanged', () => pickRussianVoice());
   window.addEventListener('resize', () => renderTokens());
   window.addEventListener('beforeunload', () => persistGame());
   document.addEventListener('visibilitychange', () => {

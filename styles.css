@@ -222,13 +222,6 @@ body {
   gap: 14px;
 }
 
-.players-panel__hint {
-  margin: -6px 0 2px;
-  color: var(--text-muted);
-  font-size: 0.7rem;
-  line-height: 1.35;
-}
-
 .player-cards {
   display: flex;
   flex-direction: column;
@@ -1630,8 +1623,8 @@ body {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  min-height: 320px;
-  max-height: min(68vh, 640px);
+  min-height: 416px;
+  max-height: min(88vh, 832px);
 }
 
 .commentary-feed {
