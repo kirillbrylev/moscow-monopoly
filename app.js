@@ -1553,6 +1553,8 @@ function isBot(player) {
   return Boolean(player?.isBot);
 }
 
+const MART_LUCK = 0.9;
+
 function usesLuckBias(player) {
   if (!player || isMiron(player) || isAshot(player)) return false;
   return player.botKind === 'mart' || player.botKind === 'lokh';
@@ -2190,11 +2192,15 @@ function rollDiceFor(player) {
       second = rollDie();
     }
   } else if (isLuckyFool(player)) {
-    if (first + second <= 7 && Math.random() < 0.88) {
+    if (first + second <= 9 && Math.random() < MART_LUCK) {
       first = rollDie();
       second = rollDie();
     }
-    if (first + second <= 5 && Math.random() < 0.8) {
+    if (first + second <= 7 && Math.random() < MART_LUCK) {
+      first = rollDie();
+      second = rollDie();
+    }
+    if (first + second <= 4 && Math.random() < MART_LUCK) {
       first = rollDie();
       second = rollDie();
     }
@@ -3226,7 +3232,7 @@ function drawCard(deckName, actor) {
     })).sort((a, b) => b.score - a.score);
     const best = scored[0];
     const natural = scored.find((item) => item.index === deck.length - 1);
-    const pick = Math.random() < 0.94 ? best : natural;
+    const pick = Math.random() < 0.97 ? best : natural;
     const [chosen] = deck.splice(pick.index, 1);
     if (pick.score > (natural?.score ?? pick.score)) {
       setLog('Марту снова везёт с картами, хоть он этого и не заслужил.');
@@ -3724,6 +3730,34 @@ function pickSpareStreet(owner, avoidId) {
   return ranked[0].cell;
 }
 
+function martOwnTradeScore(mart, deal) {
+  const receiveValue = deal.getCells.reduce((sum, cell) => sum + propertyDealValue(mart, cell, true), 0);
+  const giveValue = deal.giveCells.reduce((sum, cell) => sum + propertyDealValue(mart, cell, false), 0);
+  return {
+    net: receiveValue - giveValue - deal.giveMoney + deal.getMoney,
+    completes: deal.getCells.some((cell) => cell.group && completesSet(mart, cell)),
+    givesMonopoly: deal.giveCells.some((cell) => cell.group && ownsFullGroup(mart.id, cell.group)),
+    givesAlmost: deal.giveCells.some((cell) => {
+      if (!cell.group) return false;
+      const size = getGroupCells(cell.group).length;
+      return countOwnedInGroup(mart.id, cell.group) === size - 1;
+    }),
+  };
+}
+
+function martWouldOfferDeal(mart, partner, deal) {
+  const score = martOwnTradeScore(mart, deal);
+  if (score.givesMonopoly && !score.completes) return false;
+  if (score.givesAlmost && !score.completes) return false;
+  if (deal.giveCells.some((cell) => completesSet(partner, cell)) && !score.completes) return false;
+  if (isAshot(partner)) {
+    if (score.completes) return score.net >= 0;
+    return score.net >= 20;
+  }
+  if (score.completes) return score.net >= -25;
+  return score.net >= -12;
+}
+
 function buildMartTrade(mart) {
   const partners = tradePartners(mart).sort((a, b) => {
     const humanFirst = Number(isBot(a)) - Number(isBot(b));
@@ -3734,10 +3768,11 @@ function buildMartTrade(mart) {
     const want = pickShinyStreet(mart, partner);
     if (!want) continue;
     const offer = pickSpareStreet(mart, want.id);
+    const vsAshot = isAshot(partner);
     const gap = Math.max(0, (want.price || 0) - (offer?.price || 0));
     const giveMoney = offer
-      ? Math.min(mart.money, Math.floor(gap * (0.25 + Math.random() * 0.55)))
-      : Math.min(mart.money, Math.max(60, Math.floor((want.price || 80) * (0.35 + Math.random() * 0.4))));
+      ? Math.min(mart.money, Math.floor(gap * (vsAshot ? 0.12 + Math.random() * 0.22 : 0.25 + Math.random() * 0.55)))
+      : Math.min(mart.money, Math.max(60, Math.floor((want.price || 80) * (vsAshot ? 0.22 + Math.random() * 0.18 : 0.35 + Math.random() * 0.4))));
     const deal = {
       from: mart,
       to: partner,
@@ -3750,6 +3785,7 @@ function buildMartTrade(mart) {
     };
     if (!dealHasContent(deal)) continue;
     if (validateTrade(deal)) continue;
+    if (!martWouldOfferDeal(mart, partner, deal)) continue;
     return deal;
   }
   return null;
@@ -4199,26 +4235,35 @@ const MIRON_TRADE_OFFERS = [
   'Бери моё лишнее. Мне нужно сомкнуть ряд до трёх домов.',
 ];
 
+function martAcceptsTrade(bot, deal, score) {
+  const vsAshot = isAshot(deal.from);
+  if (score.givesMonopoly && !score.completes) return false;
+  if (givesAlmostSet(bot, deal) && !score.completes) return false;
+  if (completesOpponentSet(deal) && !score.completes) return !vsAshot && score.net >= 80;
+  if (score.cashAfter < 50) return false;
+  if (score.completes) return vsAshot ? score.net >= 0 && score.cashAfter >= 60 : true;
+
+  const paid = score.receiveValue + deal.giveMoney + deal.giveCards * 140;
+  if (score.giveValue >= 80 && paid < score.giveValue * (vsAshot ? 0.95 : 0.82)) return false;
+  if (score.gives.length && !score.receives.length) {
+    const floor = vsAshot ? 1 : 0.82;
+    return deal.giveMoney >= score.giveValue * floor && score.net >= (vsAshot ? 20 : 0);
+  }
+  if (score.receives.length) return score.net >= (vsAshot ? 15 : -15);
+  return score.net >= (vsAshot ? 35 : 20);
+}
+
 function botAcceptsTrade(bot, deal) {
   const score = scoreTradeForBot(bot, deal);
 
   if (score.cashAfter < 0) return false;
-  if (score.givesMonopoly && !score.completes && !isLuckyFool(bot)) return false;
-  if (score.givesMonopoly && !score.completes) return Math.random() < 0.12;
+  if (isLuckyFool(bot)) return martAcceptsTrade(bot, deal, score);
+  if (score.givesMonopoly && !score.completes) return false;
   if (score.giveValue >= 80 && score.receiveValue + deal.giveMoney + deal.giveCards * 140 < score.giveValue * 0.75) {
-    if (isLuckyFool(bot)) return score.net >= -70 || Math.random() < 0.45;
     return false;
   }
   if (score.gives.length && !score.receives.length && deal.giveMoney < score.giveValue * 0.85) {
-    if (isLuckyFool(bot)) return deal.giveMoney >= score.giveValue * 0.45 && Math.random() < 0.4;
     return false;
-  }
-
-  if (isLuckyFool(bot)) {
-    if (score.completes) return true;
-    if (score.receives.length && score.net >= -80) return true;
-    if (score.receives.length) return Math.random() < 0.58;
-    return score.net >= 40 || Math.random() < 0.32;
   }
 
   if (isAshot(bot)) {
@@ -4276,9 +4321,11 @@ function tradeThought(player, deal, accepted) {
   if (isLuckyFool(player)) {
     return accepted
       ? `Беру. «${got}» блестит, мне нравится.`
-      : score.giveValue > score.receiveValue
-        ? 'Не-а. Вы просите красивое, а даёте скучное.'
-        : 'Не хочу. Мне и так нормально.';
+      : isAshot(deal.from)
+        ? 'Не-а. Ашот опять дёшево. Я кот, не лох.'
+        : score.giveValue > score.receiveValue
+          ? 'Не-а. Вы просите красивое, а даёте скучное.'
+          : 'Не хочу. Мне и так нормально.';
   }
   if (isAshot(player)) {
     return accepted
