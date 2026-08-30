@@ -660,12 +660,6 @@ function renderPlayerCards() {
       flags.push(`<span class="player-card__flag player-card__flag--card">Выход из тюрьмы × ${player.jailFreeCards.length}</span>`);
     }
     if (player.bankrupt) flags.push('<span class="player-card__flag player-card__flag--jail">Банкрот</span>');
-    const ally = ashotCurrentAlly();
-    if (isAshot(player) && ally) {
-      flags.push(`<span class="player-card__flag player-card__flag--ally">Союз с ${escapeHtml(ally.name)}</span>`);
-    } else if (ally && player.id === ally.id) {
-      flags.push('<span class="player-card__flag player-card__flag--ally">Союз с Ашотом</span>');
-    }
 
     card.innerHTML = `
       <div class="player-card__head">
@@ -1370,7 +1364,6 @@ const ASHOT_SHORT_LINES = [
   'Арбуз сладкий',
   'Улицу продам',
   'Цена для своих',
-  'Союз. Пока',
   'Гранат спелый',
   'Бери, не стой',
   'Виноград как утро',
@@ -1436,35 +1429,9 @@ function ashotPickAlly(ashot) {
   return ranked[0].player;
 }
 
-const ASHOT_ALLY_LINES = [
-  '{name}, слушай. Мы теперь коалиция. Свои люди. Чай общий, улицы потом поделим.',
-  'Союз с {name}. Как на рынке: спина к спине, помидоры пополам.',
-  '{name}, давай коалицию. Я тебя прикрою. Почти бесплатно.',
-  'Официально: {name} теперь свой. Базар это запомнил. Почти честно.',
-];
-
-const ASHOT_BETRAY_LINES = [
-  'Извини, {name}. Коалиция кончилась. Цена выросла, я ж рыночный человек.',
-  'Союз был. Бизнес остался. Не обижайся, {name}, персики всё ещё со скидкой.',
-  '{name}, это не предательство. Это переоценка для своих.',
-  'Мы же свои, {name}. Свои тоже платят. Иначе какой базар?',
-  '{name}, прости. Улица ушла по рынку. Дружба — отдельно, ценник — отдельно.',
-];
-
-function ashotFillName(line, name) {
-  return line.replaceAll('{name}', name);
-}
-
-function ashotAnnounceCoalition(ally) {
-  if (!ally) return;
-  ashotTurnNote = 'Союз. Пока';
-  setLog(`Ашот предлагает коалицию ${ally.name}.`);
-}
-
 function ashotAnnounceBetrayal(ally) {
   if (!ally) return;
   ashotTurnNote = 'Цена для своих';
-  setLog(`Ашот предаёт союз с ${ally.name}.`);
   ashotBetrayedIds.push(ally.id);
   ashotAllyId = null;
   ashotAllyHooks = 0;
@@ -1476,7 +1443,6 @@ function ashotMaybeFormCoalition(ashot) {
   if (!pick) return null;
   ashotAllyId = pick.id;
   ashotAllyHooks = 0;
-  ashotAnnounceCoalition(pick);
   refreshUI();
   return pick;
 }
@@ -4110,12 +4076,9 @@ function tradeThought(player, deal, accepted) {
         : 'Не хочу. Мне и так нормально.';
   }
   if (isAshot(player)) {
-    if (ashotIsAlly(deal.from) && !accepted) {
-      return `Мы союзники, ${deal.from.name}, но так не базар. Дружба дружбой, ценник отдельно.`;
-    }
     return accepted
       ? `Беру. Честно, почти как родному. Плюс примерно ₽ ${formatMoney(score.net)}.`
-      : `Не-е, браток. Так не базар. Мне минус ₽ ${formatMoney(Math.abs(score.net))}.`;
+      : 'Не-е, браток. Так не базар.';
   }
   if (isUnluckySmart(player)) {
     return accepted
@@ -4419,7 +4382,6 @@ async function movePlayer(player, steps) {
     }
     renderTokens(player.id);
     renderPlayerCards();
-    showPropertyPreview(getCellByPosition(player.position));
     await sleep(isBot(player) ? 440 : 220);
   }
 }
@@ -4434,7 +4396,6 @@ async function movePlayerTo(player, destination, { collectGo = true } = {}) {
     }
     renderTokens(player.id);
     renderPlayerCards();
-    showPropertyPreview(getCellByPosition(player.position));
     await sleep(180);
   }
 }
@@ -4454,7 +4415,6 @@ async function movePlayerSteps(player, steps) {
     }
     renderTokens(player.id);
     renderPlayerCards();
-    showPropertyPreview(getCellByPosition(player.position));
     await sleep(180);
   }
 }
@@ -4567,7 +4527,6 @@ async function resolveLanding(player, modifiers = {}) {
   if (player.bankrupt || player.inJail) return;
 
   const cell = getCellByPosition(player.position);
-  showPropertyPreview(cell);
 
   if (cell.id === GO_TO_JAIL_POSITION) {
     await sendToJail(player);

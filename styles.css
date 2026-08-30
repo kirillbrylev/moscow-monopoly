@@ -1016,11 +1016,6 @@ body {
   color: var(--gold);
 }
 
-.player-card__flag--ally {
-  background: rgba(163, 21, 69, 0.22);
-  color: #f48fb1;
-}
-
 .player-card__props {
   display: flex;
   flex-wrap: wrap;
