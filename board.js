@@ -369,7 +369,7 @@ export const PLAYER_CATALOG = [
     botId: 'lokh',
     botKind: 'lokh',
     defaultOn: true,
-    blurb: 'утка · умный, очень невезучий',
+    blurb: 'утка · умный, невезучий, трусливый',
   },
   {
     key: 'miron',

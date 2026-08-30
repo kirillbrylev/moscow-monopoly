@@ -643,13 +643,13 @@ function renderPlayerCards() {
       : '<p class="player-card__none">Нет участков</p>';
 
     const role = isMiron(player)
-      ? 'Сова · чемпион, считает вероятности'
+      ? 'Сова · чемпион'
       : isAshot(player)
-        ? 'Опытный продавец фруктов из Сочи'
+        ? 'Фрукты из Сочи'
         : isUnluckySmart(player)
-          ? 'Утка · умный, очень невезучий'
+          ? 'Утка · умный трус'
           : isLuckyFool(player)
-            ? 'Кот · везучий, глупый'
+            ? 'Кот · везучий дурак'
             : player.isBot
               ? 'Бот'
               : 'Человек';
@@ -670,11 +670,10 @@ function renderPlayerCards() {
         ${index === state.activePlayerIndex && !player.bankrupt ? '<span class="player-card__badge">Ход</span>' : ''}
       </div>
       ${flags.length ? `<div class="player-card__flags">${flags.join('')}</div>` : ''}
-      <div class="player-card__money">
-        <span class="player-card__money-label">Капитал</span>
+      <div class="player-card__meta">
         <span class="player-card__money-value">₽ ${formatMoney(player.money)}</span>
+        <span class="player-card__position">${cell.name}</span>
       </div>
-      <p class="player-card__position">Позиция: <strong>${cell.name}</strong></p>
       <div class="player-card__props">${chips}</div>
     `;
 
