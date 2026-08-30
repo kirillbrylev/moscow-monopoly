@@ -402,6 +402,7 @@ function beginMatch(roster) {
   chatSpeakerId = humanPlayers()[0]?.id ?? 0;
   refreshUI();
   persistGame('Новая игра сохранена');
+  resumeBotOrLanding();
 }
 
 function showLobbyError(message) {
