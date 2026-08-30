@@ -643,7 +643,7 @@ function renderPlayerCards() {
       : '<p class="player-card__none">Нет участков</p>';
 
     const role = isMiron(player)
-      ? 'Сова · спокойный, ходит сам'
+      ? 'Сова · чемпион, считает вероятности'
       : isAshot(player)
         ? 'Опытный продавец фруктов из Сочи'
         : isUnluckySmart(player)
@@ -1612,6 +1612,48 @@ function groupPriority(group) {
   }[group] || 1;
 }
 
+const CELL_HIT = [
+  31, 21, 19, 22, 24, 30, 23, 26, 23, 23,
+  39, 27, 26, 24, 25, 31, 28, 26, 29, 31,
+  29, 28, 27, 27, 32, 31, 27, 27, 28, 26,
+  0, 27, 26, 24, 25, 25, 24, 22, 22, 22,
+];
+
+function cellHit(cell) {
+  return CELL_HIT[cell?.id] || 20;
+}
+
+function groupHit(group) {
+  return getGroupCells(group).reduce((sum, cell) => sum + cellHit(cell), 0);
+}
+
+function mironGroupEdge(group) {
+  return {
+    orange: 100,
+    red: 92,
+    lightblue: 82,
+    pink: 78,
+    yellow: 62,
+    green: 40,
+    darkblue: 38,
+    brown: 28,
+  }[group] || 20;
+}
+
+function mironStreetEv(player, cell) {
+  if (!cell) return 0;
+  let ev = cellHit(cell) * 1.4;
+  if (cell.group) {
+    ev += groupHit(cell.group) * 0.35 + mironGroupEdge(cell.group);
+    if (completesSet(player, cell)) ev += 240 + mironGroupEdge(cell.group);
+    else if (countOwnedInGroup(player.id, cell.group) >= 1) ev += 80;
+    if (opponentWouldComplete(cell, player.id)) ev += 150 + mironGroupEdge(cell.group) * 0.5;
+  }
+  if (cell.type === 'railroad') ev += 48 + countOwnedOfType(player.id, 'railroad') * 58;
+  if (cell.type === 'utility') ev -= 28;
+  return ev;
+}
+
 function countOwnedInGroup(playerId, group) {
   return getGroupCells(group).filter((cell) => state.titles[cell.id].ownerId === playerId).length;
 }
@@ -1644,11 +1686,24 @@ function martCashReserve(player) {
   return reserve;
 }
 
+function mironNeedsToWalk(player) {
+  if (freeTitleCount() >= 5) return true;
+  if (Object.keys(PROPERTY_GROUPS).some((group) => {
+    const cells = getGroupCells(group);
+    const owned = countOwnedInGroup(player.id, group);
+    return owned === cells.length - 1 && cells.some((cell) => state.titles[cell.id].ownerId == null);
+  })) return true;
+  return ownedMonopolyGroups(player.id).some((group) => {
+    const cells = getGroupCells(group);
+    const minHouses = Math.min(...cells.map((cell) => state.titles[cell.id].houses));
+    return minHouses < 3 && player.money >= getHouseCost(cells[0]) + 40;
+  });
+}
+
 function mironWantsOutOfJail(player) {
-  if (martWantsOutOfJail(player)) return true;
-  if (freeTitleCount() >= 8) return true;
-  if (freeTitleCount() >= 3 && player.money >= 180 && !boardIsDangerous(player.id)) return true;
-  return false;
+  if (mironNeedsToWalk(player)) return true;
+  if (boardIsDangerous(player.id)) return false;
+  return freeTitleCount() >= 2 && player.money >= 220 && !boardIsDangerous(player.id);
 }
 
 function martWantsOutOfJail(player) {
@@ -2123,12 +2178,24 @@ function rollDiceFor(player) {
   let first = rollDie();
   let second = rollDie();
   if (!usesLuckBias(player)) return [first, second];
-  if (isUnluckySmart(player) && first + second >= 8 && Math.random() < 0.5) {
-    first = rollDie();
-    second = rollDie();
-  } else if (isLuckyFool(player) && first + second <= 5 && Math.random() < 0.5) {
-    first = rollDie();
-    second = rollDie();
+  if (isUnluckySmart(player)) {
+    if (first + second >= 7 && Math.random() < 0.88) {
+      first = rollDie();
+      second = rollDie();
+    }
+    if (first + second >= 9 && Math.random() < 0.8) {
+      first = rollDie();
+      second = rollDie();
+    }
+  } else if (isLuckyFool(player)) {
+    if (first + second <= 7 && Math.random() < 0.88) {
+      first = rollDie();
+      second = rollDie();
+    }
+    if (first + second <= 5 && Math.random() < 0.8) {
+      first = rollDie();
+      second = rollDie();
+    }
   }
   return [first, second];
 }
@@ -2206,10 +2273,12 @@ function boardIsDangerous(exceptId) {
 
 function mironCashReserve(player) {
   const free = freeTitleCount();
-  const monopolies = ownedMonopolyGroups(player.id).length;
-  let reserve = free >= 12 ? 80 : free >= 6 ? 120 : 160;
-  if (monopolies > 0) reserve = Math.min(reserve, 110);
-  if (boardIsDangerous(player.id)) reserve += 90;
+  const needsThree = ownedMonopolyGroups(player.id).some((group) => (
+    Math.min(...getGroupCells(group).map((cell) => state.titles[cell.id].houses)) < 3
+  ));
+  let reserve = free >= 12 ? 50 : free >= 7 ? 80 : 120;
+  if (needsThree) reserve = Math.min(reserve, 40);
+  if (boardIsDangerous(player.id)) reserve += 110;
   return reserve;
 }
 
@@ -2221,27 +2290,26 @@ function mironShouldBuy(player, cell) {
   if (!mironCanCover(player, cell.price)) return false;
   const after = player.money - cell.price;
   const reserve = mironCashReserve(player);
+  const ev = mironStreetEv(player, cell);
 
-  if (completesSet(player, cell)) return after >= 20 || mironCanCover(player, cell.price, 40);
-  if (opponentWouldComplete(cell, player.id)) return after >= 10 || mironCanCover(player, cell.price, 20);
+  if (completesSet(player, cell)) return after >= 15 || mironCanCover(player, cell.price, 30);
+  if (opponentWouldComplete(cell, player.id)) return after >= 8 || mironCanCover(player, cell.price, 15);
   if (after < 0) return false;
 
+  if (cell.type === 'utility') {
+    return countOwnedOfType(player.id, 'utility') >= 1 ? after >= 40 : after >= reserve + 40;
+  }
   if (cell.type === 'railroad') {
     const rails = countOwnedOfType(player.id, 'railroad');
-    if (rails >= 1) return after >= 40;
-    return after >= Math.min(reserve, 90);
-  }
-  if (cell.type === 'utility') {
-    if (countOwnedOfType(player.id, 'utility') >= 1) return after >= 50;
-    return after >= reserve + 20;
+    if (rails >= 1) return after >= 25;
+    return after >= Math.min(reserve, 70);
   }
   if (cell.type === 'property') {
-    if (countOwnedInGroup(player.id, cell.group) >= 1) return after >= 30;
-    const free = freeTitleCount();
-    if (groupPriority(cell.group) >= 6) return after >= (free > 8 ? 30 : 60);
-    if (free > 10) return after >= 40;
-    if (groupPriority(cell.group) >= 5) return after >= 70;
-    return after >= Math.min(reserve, 120);
+    if (countOwnedInGroup(player.id, cell.group) >= 1) return after >= 20;
+    if (ev >= 120) return after >= (freeTitleCount() > 8 ? 20 : 40);
+    if (freeTitleCount() > 10) return after >= 30;
+    if (ev >= 90) return after >= 55;
+    return after >= reserve;
   }
   return false;
 }
@@ -2297,27 +2365,30 @@ function ashotMaxBid(player, cell) {
 }
 
 function mironMaxBid(player, cell) {
-  const budget = Math.max(0, player.money - Math.min(mironCashReserve(player), 90));
-  if (budget < 20) return 0;
-  if (completesSet(player, cell)) return Math.min(budget, Math.floor(cell.price * 1.85));
-  if (opponentWouldComplete(cell, player.id)) return Math.min(budget, Math.floor(cell.price * 1.6));
+  const keep = boardIsDangerous(player.id) ? 70 : 36;
+  const budget = Math.max(0, player.money - keep);
+  if (budget < 15) return 0;
+  const ev = mironStreetEv(player, cell);
+  if (completesSet(player, cell)) return Math.min(budget, Math.floor(cell.price * 2.25));
+  if (opponentWouldComplete(cell, player.id)) {
+    const edge = cell.group ? mironGroupEdge(cell.group) : 40;
+    return Math.min(budget, Math.floor(cell.price * (edge >= 78 ? 2.05 : 1.65)));
+  }
   if (cell.type === 'property' && countOwnedInGroup(player.id, cell.group) >= 1) {
-    return Math.min(budget, Math.floor(cell.price * 1.35));
+    return Math.min(budget, Math.floor(cell.price * (ev >= 140 ? 1.55 : 1.32)));
   }
   if (cell.type === 'railroad' && countOwnedOfType(player.id, 'railroad') >= 1) {
-    return Math.min(budget, Math.floor(cell.price * 1.25));
+    return Math.min(budget, Math.floor(cell.price * 1.42));
   }
-  if (cell.type === 'utility' && countOwnedOfType(player.id, 'utility') >= 1) {
-    return Math.min(budget, Math.floor(cell.price * 1.15));
+  if (cell.type === 'utility') {
+    return countOwnedOfType(player.id, 'utility') >= 1
+      ? Math.min(budget, Math.floor(cell.price * 1.05))
+      : Math.min(budget, Math.floor(cell.price * 0.38));
   }
-  if (cell.type === 'property' && groupPriority(cell.group) >= 6) {
-    return Math.min(budget, Math.floor(cell.price * 1.08));
-  }
-  if (cell.type === 'railroad') return Math.min(budget, Math.floor(cell.price * 0.95));
-  if (cell.type === 'property' && groupPriority(cell.group) >= 5) {
-    return Math.min(budget, Math.floor(cell.price * 0.92));
-  }
-  return Math.min(budget, Math.floor(cell.price * 0.78));
+  if (ev >= 130) return Math.min(budget, Math.floor(cell.price * 1.28));
+  if (cell.type === 'railroad') return Math.min(budget, Math.floor(cell.price * 1.08));
+  if (ev >= 95) return Math.min(budget, Math.floor(cell.price * 0.98));
+  return Math.min(budget, Math.floor(cell.price * 0.62));
 }
 
 function martShouldBuy(player, cell) {
@@ -2414,10 +2485,11 @@ function purchaseThought(player, cell, want) {
     return `«${cell.name}» подождёт. Ашот лучше поторгуется, чем сам наступит.`;
   }
   if (isMiron(player)) {
-    if (want && completesSet(player, cell)) return `Закрываю «${cell.name}». Теперь соседи будут платить мне за воздух.`;
-    if (want && cell.type === 'railroad') return 'Ещё вокзал. Поезда не спрашивают, везучий ты или утка.';
-    if (want) return `«${cell.name}» за свои деньги. Романтика минимальная, профит — потом.`;
-    return `«${cell.name}» подождёт. Я сова, не филантроп.`;
+    if (want && completesSet(player, cell)) return `Закрываю «${cell.name}». Частота плюс три дома — это уже рента, не открытка.`;
+    if (want && cell.group === 'orange') return 'Оранжевая. После тюрьмы сюда ходят чаще всего. Беру.';
+    if (want && cell.type === 'railroad') return 'Вокзал. Четыре дороги бьют одну синюю улицу.';
+    if (want) return `«${cell.name}» по таблице попаданий стоит своих денег.`;
+    return `«${cell.name}» редкая клетка. Пусть аукцион сам себя накажет.`;
   }
   if (want) return 'О, красивая клетка, беру.';
   if (completesSet(player, cell)) return 'Дома? Потом как-нибудь.';
@@ -2495,9 +2567,9 @@ function jailThought(player, action, mustLeave) {
     return 'Кину. Если не выйдет — ладно, один ход без базара.';
   }
   if (isMiron(player)) {
-    if (action === 'card') return 'Трачу «выход». Свобода дешевле, чем слушать, как Март пукает за стенкой.';
-    if (action === 'pay') return 'Полтинник за свободу. В Москве и не такое берут за воздух.';
-    return 'Сижу. Иногда лучший ход — не делать вид, что ты везучий.';
+    if (action === 'card') return 'Выхожу. На поле ещё есть клетки без хозяина — это не тюрьма, это магазин.';
+    if (action === 'pay') return 'Плачу. Ранняя свобода покупает улицы, поздняя — только чужую ренту.';
+    return 'Сижу. Когда поле заставлено, тюрьма — лучшая вероятность.';
   }
   if (action === 'card') return 'О, карточка. Повезло опять.';
   if (action === 'pay') return mustLeave ? 'Ну всё, плачу. Надоело.' : 'Скучно тут, плачу.';
@@ -2515,8 +2587,8 @@ function buildThought(player, cell, built) {
   }
   if (isMiron(player)) {
     return built
-      ? 'Ставлю дом. Пусть платят за вид из окна, которого нет.'
-      : 'Дома подождут. Наличные любят, когда их не разбрасывают.';
+      ? 'Ставлю до трёх домов. Четвёртый уже жадность, третий — чемпионат.'
+      : 'Дома подождут. Сначала наличные на чужие отели.';
   }
   return built ? 'Ровно ставлю. Три дома — аренда уже кусается.' : 'Пока коплю. Кубики и так против.';
 }
@@ -2578,14 +2650,37 @@ async function botRaiseCash(player, amount) {
   addComment(player, mortgageThought(player));
   let guard = 0;
   while (player.money < amount && liquidValue(player) >= amount && guard < 24) {
-    const raised = isLuckyFool(player) ? lokhRaiseOnce(player) : martRaiseOnce(player);
+    const raised = isLuckyFool(player)
+      ? lokhRaiseOnce(player)
+      : isMiron(player)
+        ? mironRaiseOnce(player)
+        : martRaiseOnce(player);
     if (!raised) break;
     refreshUI();
     guard += 1;
   }
 }
 
-function pickMironBuildCell(player) {
+function mironRaiseOnce(player) {
+  if (mortgageByScore(player, (cell) => {
+    if (cell.group && ownsFullGroup(player.id, cell.group)) return 0;
+    if (cell.type === 'utility') return 96;
+    if (cell.group === 'brown' || cell.group === 'green') return 82;
+    if (cell.type === 'railroad') return countOwnedOfType(player.id, 'railroad') <= 2 ? 28 : 74;
+    return 55 - Math.floor(mironGroupEdge(cell.group) / 4);
+  })) return true;
+  return sellEvenHouse(player, ['brown', 'green', 'darkblue', 'yellow']);
+}
+
+function mironShouldHotel(player, group) {
+  const minHouses = Math.min(...getGroupCells(group).map((cell) => state.titles[cell.id].houses));
+  if (minHouses < 3) return false;
+  if (state.bank.houses <= 14) return false;
+  if (['orange', 'red', 'lightblue', 'pink'].includes(group) && state.bank.houses <= 20) return false;
+  return player.money > mironCashReserve(player) + 180;
+}
+
+function pickAshotBuildCell(player) {
   const groups = ownedMonopolyGroups(player.id)
     .filter((group) => !groupHasMortgage(group))
     .sort((a, b) => {
@@ -2597,6 +2692,26 @@ function pickMironBuildCell(player) {
       return groupPriority(b) - groupPriority(a);
     });
   for (const group of groups) {
+    const cell = pickBuildCell(player, group);
+    if (cell) return cell;
+  }
+  return null;
+}
+
+function pickMironBuildCell(player) {
+  const groups = ownedMonopolyGroups(player.id)
+    .filter((group) => !groupHasMortgage(group))
+    .sort((a, b) => {
+      const minA = Math.min(...getGroupCells(a).map((cell) => state.titles[cell.id].houses));
+      const minB = Math.min(...getGroupCells(b).map((cell) => state.titles[cell.id].houses));
+      const needA = minA < 3 ? 2 : minA < 4 && mironShouldHotel(player, a) ? 1 : 0;
+      const needB = minB < 3 ? 2 : minB < 4 && mironShouldHotel(player, b) ? 1 : 0;
+      if (needA !== needB) return needB - needA;
+      return mironGroupEdge(b) - mironGroupEdge(a) || groupHit(b) - groupHit(a);
+    });
+  for (const group of groups) {
+    const minHouses = Math.min(...getGroupCells(group).map((cell) => state.titles[cell.id].houses));
+    if (minHouses >= 3 && !mironShouldHotel(player, group)) continue;
     const cell = pickBuildCell(player, group);
     if (cell) return cell;
   }
@@ -2653,13 +2768,17 @@ async function botBuildIfWanted(player) {
     let guard = 0;
     let builtCell = null;
     while (guard < 16) {
-      const cell = pickMironBuildCell(player);
+      const cell = isMiron(player) ? pickMironBuildCell(player) : pickAshotBuildCell(player);
       if (!cell) break;
       const cost = getHouseCost(cell);
       const minHouses = Math.min(...getGroupCells(cell.group).map((item) => state.titles[item.id].houses));
-      const reserve = minHouses < 3
-        ? (boardIsDangerous(player.id) ? 70 : 30)
-        : (boardIsDangerous(player.id) ? 140 : 80);
+      const reserve = isMiron(player)
+        ? (minHouses < 3
+          ? (['orange', 'red', 'lightblue', 'pink'].includes(cell.group) ? 22 : 36)
+          : (boardIsDangerous(player.id) ? 160 : 100))
+        : (minHouses < 3
+          ? (boardIsDangerous(player.id) ? 70 : 30)
+          : (boardIsDangerous(player.id) ? 140 : 80));
       if (player.money - cost < reserve) break;
       buyHouse(player, cell.id);
       builtCell = cell;
@@ -3097,21 +3216,33 @@ function drawCard(deckName, actor) {
     return deck.pop();
   }
 
-  const peekCount = Math.min(3, deck.length);
-  const start = deck.length - peekCount;
-  const scored = deck.slice(start).map((card, offset) => ({
-    card,
-    index: start + offset,
-    score: scoreCardForLuck(card, actor),
-  }));
-  scored.sort((a, b) => (isUnluckySmart(actor) ? a.score - b.score : b.score - a.score));
-  const pick = Math.random() < 0.72 ? scored[0] : scored.find((item) => item.index === deck.length - 1);
-  const [chosen] = deck.splice(pick.index, 1);
-  if (isUnluckySmart(actor) && pick.score < scored[scored.length - 1].score) {
-    setLog('Карты тоже против Лоха: выпало самое неудачное.');
+  if (isLuckyFool(actor)) {
+    const scored = deck.map((card, index) => ({
+      card,
+      index,
+      score: scoreCardForLuck(card, actor),
+    })).sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    const natural = scored.find((item) => item.index === deck.length - 1);
+    const pick = Math.random() < 0.94 ? best : natural;
+    const [chosen] = deck.splice(pick.index, 1);
+    if (pick.score > (natural?.score ?? pick.score)) {
+      setLog('Марту снова везёт с картами, хоть он этого и не заслужил.');
+    }
+    return chosen;
   }
-  if (isLuckyFool(actor) && pick.score > scored[scored.length - 1].score) {
-    setLog('Марту снова везёт с картами, хоть он этого и не заслужил.');
+
+  const scored = deck.map((card, index) => ({
+    card,
+    index,
+    score: scoreCardForLuck(card, actor),
+  })).sort((a, b) => a.score - b.score);
+  const worst = scored[0];
+  const natural = scored.find((item) => item.index === deck.length - 1);
+  const pick = Math.random() < 0.94 ? worst : natural;
+  const [chosen] = deck.splice(pick.index, 1);
+  if (pick.score < (natural?.score ?? pick.score)) {
+    setLog('Карты тоже против Лоха: выпало самое неудачное.');
   }
   return chosen;
 }
@@ -3871,13 +4002,25 @@ async function botTryTrade(player) {
     return;
   }
 
+  if (isMiron(player) && mironWantsToTrade(player)) {
+    const skipIds = [];
+    let rounds = 0;
+    while (rounds < 3) {
+      const next = buildMironTrade(player, skipIds);
+      if (!next) break;
+      addComment(player, pickUnusedLine(MIRON_TRADE_OFFERS, usedMironTradeLines));
+      setLog(`${player.name} предлагает сделку ${next.to.name}.`);
+      await resolveTrade(next);
+      next.giveCells.concat(next.getCells).forEach((cell) => skipIds.push(cell.id));
+      rounds += 1;
+    }
+    return;
+  }
+
   let deal = null;
   if (isLuckyFool(player) && martWantsToTrade(player)) {
     deal = buildMartTrade(player);
     if (deal) pushComment(player, pickUnusedLine(MART_TRADE_OFFERS, usedMartTradeLines), { echoLog: false });
-  } else if (isMiron(player) && mironWantsToTrade(player)) {
-    deal = buildMironTrade(player);
-    if (deal) addComment(player, pickUnusedLine(MIRON_TRADE_OFFERS, usedMironTradeLines));
   }
   if (!deal) return;
   setLog(`${player.name} предлагает сделку ${deal.to.name}.`);
@@ -3910,7 +4053,7 @@ function findMironClosingStreets(player) {
         const ownerId = state.titles[cell.id]?.ownerId;
         return ownerId != null && ownerId !== player.id && canTradeTitle(cell);
       });
-      return missing ? { cell: missing, priority: groupPriority(group) } : null;
+      return missing ? { cell: missing, priority: mironGroupEdge(group) } : null;
     })
     .filter(Boolean)
     .sort((a, b) => b.priority - a.priority);
@@ -3929,85 +4072,114 @@ function pickMironOfferStreet(miron, partner, want) {
       const size = getGroupCells(cell.group).length;
       if (countOwnedInGroup(miron.id, cell.group) === size - 1) return false;
     }
-    if (completesSet(partner, cell) && groupPriority(want.group) < (cell.group ? groupPriority(cell.group) : 0) + 2) {
-      return false;
+    if (completesSet(partner, cell)) {
+      const giveEdge = cell.group ? mironGroupEdge(cell.group) : 20;
+      const getEdge = want.group ? mironGroupEdge(want.group) : 20;
+      if (getEdge <= giveEdge + 12) return false;
     }
     return true;
   });
   if (!ours.length) return null;
   ours.sort((a, b) => {
-    const completeA = completesSet(partner, a) ? -4 : 0;
-    const completeB = completesSet(partner, b) ? -4 : 0;
-    const helpA = a.group && countOwnedInGroup(partner.id, a.group) >= 1 ? 2 : 0;
-    const helpB = b.group && countOwnedInGroup(partner.id, b.group) >= 1 ? 2 : 0;
-    const junkA = a.group && countOwnedInGroup(miron.id, a.group) <= 1 ? 1 : 0;
-    const junkB = b.group && countOwnedInGroup(miron.id, b.group) <= 1 ? 1 : 0;
-    return (completeB + helpB + junkB) - (completeA + helpA + junkA);
+    const completeA = completesSet(partner, a) ? 40 : 0;
+    const completeB = completesSet(partner, b) ? 40 : 0;
+    const helpA = a.group && countOwnedInGroup(partner.id, a.group) >= 1 ? 12 : 0;
+    const helpB = b.group && countOwnedInGroup(partner.id, b.group) >= 1 ? 12 : 0;
+    const junkA = mironStreetEv(miron, a);
+    const junkB = mironStreetEv(miron, b);
+    return (junkA + completeA + helpA) - (junkB + completeB + helpB);
   });
   return ours[0];
 }
 
-function mironWantsToTrade(player) {
-  if (findMironClosingStreets(player).length) return true;
-  return Math.random() < 0.42;
+function findMironDenyStreets(player) {
+  const found = [];
+  Object.keys(PROPERTY_GROUPS).forEach((group) => {
+    if (mironGroupEdge(group) < 70) return;
+    const cells = getGroupCells(group);
+    state.players.forEach((opponent) => {
+      if (opponent.id === player.id || opponent.bankrupt) return;
+      if (countOwnedInGroup(opponent.id, group) !== cells.length - 1) return;
+      const missing = cells.find((cell) => {
+        const ownerId = state.titles[cell.id]?.ownerId;
+        return ownerId != null && ownerId !== opponent.id && ownerId !== player.id && canTradeTitle(cell);
+      });
+      if (missing) found.push(missing);
+    });
+  });
+  return found.sort((a, b) => mironGroupEdge(b.group) - mironGroupEdge(a.group));
 }
 
-function buildMironTrade(miron) {
+function mironWantsToTrade(player) {
+  if (findMironClosingStreets(player).length) return true;
+  if (findMironDenyStreets(player).length) return true;
+  return tradePartners(player).some((partner) => (
+    tradeableFreeCells(partner).some((cell) => cell.group && countOwnedInGroup(player.id, cell.group) >= 1)
+  ));
+}
+
+function makeMironBuyDeal(miron, partner, want, offer) {
+  const gap = Math.max(0, (want.price || 0) - (offer?.price || 0));
+  const edge = want.group ? mironGroupEdge(want.group) : 40;
+  let giveMoney = Math.floor(gap * (isLuckyFool(partner) ? 0.38 : isUnluckySmart(partner) ? 1.08 : 0.92));
+  if (edge >= 90) giveMoney = Math.max(giveMoney, Math.floor((want.price || 80) * 0.95));
+  if (!offer) giveMoney = Math.max(giveMoney, Math.floor((want.price || 80) * (isBot(partner) ? 0.92 : 0.78)));
+  const keep = edge >= 90 ? 35 : 70;
+  giveMoney = Math.max(0, Math.min(miron.money - keep, giveMoney));
+  if (!offer && giveMoney < (want.price || 80) * 0.4) return null;
+  const deal = {
+    from: miron,
+    to: partner,
+    giveCells: offer ? [offer] : [],
+    getCells: [want],
+    giveMoney,
+    getMoney: 0,
+    giveCards: 0,
+    getCards: 0,
+  };
+  if (!dealHasContent(deal) || validateTrade(deal)) return null;
+  return deal;
+}
+
+function buildMironTrade(miron, skipIds = []) {
   for (const { cell: want } of findMironClosingStreets(miron)) {
+    if (skipIds.includes(want.id)) continue;
     const partner = titleOwner(want);
     if (!partner || partner.bankrupt) continue;
-    const offer = pickMironOfferStreet(miron, partner, want);
-    const gap = Math.max(0, (want.price || 0) - (offer?.price || 0));
-    let giveMoney = Math.floor(gap * (isLuckyFool(partner) ? 0.4 : isUnluckySmart(partner) ? 1.05 : 0.9));
-    if (!offer) giveMoney = Math.max(giveMoney, Math.floor((want.price || 80) * (isBot(partner) ? 0.85 : 0.7)));
-    giveMoney = Math.max(0, Math.min(miron.money - 70, giveMoney));
-    if (!offer && giveMoney < (want.price || 80) * 0.45) continue;
-    const deal = {
-      from: miron,
-      to: partner,
-      giveCells: offer ? [offer] : [],
-      getCells: [want],
-      giveMoney,
-      getMoney: 0,
-      giveCards: 0,
-      getCards: 0,
-    };
-    if (!dealHasContent(deal) || validateTrade(deal)) continue;
-    return deal;
+    const deal = makeMironBuyDeal(miron, partner, want, pickMironOfferStreet(miron, partner, want));
+    if (deal) return deal;
+  }
+
+  for (const want of findMironDenyStreets(miron)) {
+    if (skipIds.includes(want.id)) continue;
+    const partner = titleOwner(want);
+    if (!partner || partner.bankrupt) continue;
+    const deal = makeMironBuyDeal(miron, partner, want, pickMironOfferStreet(miron, partner, want));
+    if (deal) return deal;
   }
 
   const partners = tradePartners(miron).sort((a, b) => Number(!isBot(a)) - Number(!isBot(b)));
   for (const partner of partners) {
-    const want = pickShinyStreet(miron, partner);
-    if (!want || !want.group) continue;
-    if (countOwnedInGroup(miron.id, want.group) < 1) continue;
-    if (completesSet(miron, want)) continue;
-    const offer = pickMironOfferStreet(miron, partner, want);
-    const giveMoney = Math.min(
-      Math.max(0, miron.money - 90),
-      Math.floor(((want.price || 80) - (offer?.price || 0)) * 0.55),
-    );
-    const deal = {
-      from: miron,
-      to: partner,
-      giveCells: offer ? [offer] : [],
-      getCells: [want],
-      giveMoney: Math.max(0, giveMoney),
-      getMoney: 0,
-      giveCards: 0,
-      getCards: 0,
-    };
-    if (!dealHasContent(deal) || validateTrade(deal)) continue;
-    return deal;
+    const want = tradeableFreeCells(partner)
+      .filter((cell) => (
+        !skipIds.includes(cell.id)
+        && cell.group
+        && countOwnedInGroup(miron.id, cell.group) >= 1
+        && !completesSet(miron, cell)
+      ))
+      .sort((a, b) => mironStreetEv(miron, b) - mironStreetEv(miron, a))[0];
+    if (!want) continue;
+    const deal = makeMironBuyDeal(miron, partner, want, pickMironOfferStreet(miron, partner, want));
+    if (deal) return deal;
   }
   return null;
 }
 
 const MIRON_TRADE_OFFERS = [
-  'Меняемся. Мне нужна эта улица, тебе — арифметика.',
-  'Предлагаю обмен. Я считал дважды.',
-  'Сделка без поэзии: клетки на клетки.',
-  'Бери моё лишнее. Мне нужно сомкнуть ряд.',
+  'Меняемся. Мне нужна частота попаданий, тебе — красивое имя улицы.',
+  'Предлагаю обмен. Считал таблицу, не настроение.',
+  'Сделка без поэзии: оранжевая бьёт синюю почти всегда.',
+  'Бери моё лишнее. Мне нужно сомкнуть ряд до трёх домов.',
 ];
 
 function botAcceptsTrade(bot, deal) {
@@ -4052,6 +4224,22 @@ function botAcceptsTrade(bot, deal) {
     if (score.cashAfter < 140 && deal.getMoney > deal.giveMoney) return false;
     if (score.completes && score.net >= 20) return true;
     return score.net >= 90;
+  }
+
+  if (isMiron(bot)) {
+    const mine = deal.giveCells;
+    const theirs = deal.getCells;
+    const getEdge = mine.reduce((best, cell) => Math.max(best, cell.group ? mironGroupEdge(cell.group) : 0), 0);
+    const giveEdge = theirs.reduce((best, cell) => Math.max(best, cell.group ? mironGroupEdge(cell.group) : 0), 0);
+    if (score.givesMonopoly && !score.completes) return false;
+    if (givesAlmostSet(bot, deal) && !score.completes) return false;
+    if (completesOpponentSet(deal) && !score.completes) return false;
+    if (completesOpponentSet(deal) && score.completes && getEdge <= giveEdge + 10) return false;
+    if (score.cashAfter < 40) return false;
+    if (score.completes && getEdge >= 78) return score.net >= -130 && score.cashAfter >= 35;
+    if (score.completes) return score.net >= -35 && score.cashAfter >= 55;
+    if (score.gives.length && !score.receives.length) return deal.giveMoney >= score.giveValue * 1.55 && score.net >= 80;
+    return score.net >= 75;
   }
 
   if (givesAlmostSet(bot, deal) && !score.completes) return false;
@@ -4119,6 +4307,23 @@ function executeTrade(deal) {
   setLog(`${deal.from.name} и ${deal.to.name} меняются. ${formatDealSide(deal.from, deal.giveCells, deal.giveMoney, deal.giveCards, 'отдаёт')}; ${formatDealSide(deal.to, deal.getCells, deal.getMoney, deal.getCards, 'отдаёт')}.`);
 }
 
+async function showBotTradeDecision(deal, accepted) {
+  const verdict = accepted ? 'Принято' : 'Отклонено';
+  openModal(`
+    <div class="modal-card">
+      <div class="modal-card__kicker">Сделка ботов</div>
+      <h3 class="modal-card__title">${escapeHtml(deal.from.name)} → ${escapeHtml(deal.to.name)}</h3>
+      <div class="trade-review">
+        <div class="trade-review__side">${escapeHtml(formatDealSide(deal.from, deal.giveCells, deal.giveMoney, deal.giveCards, 'отдаёт'))}</div>
+        <div class="trade-review__side">${escapeHtml(formatDealSide(deal.to, deal.getCells, deal.getMoney, deal.getCards, 'отдаёт'))}</div>
+      </div>
+      <div class="trade-review__verdict${accepted ? ' trade-review__verdict--yes' : ' trade-review__verdict--no'}">${verdict}</div>
+    </div>
+  `, { dock: 'board' });
+  await sleep(accepted ? 2400 : 1800);
+  closeModal();
+}
+
 async function confirmHumanTrade(deal) {
   openModal(`
     <div class="modal-card">
@@ -4144,6 +4349,9 @@ async function resolveTrade(deal) {
     await botThink(deal.to, isLuckyFool(deal.to) ? 'Смотрю, блестит или нет.' : isMiron(deal.to) ? 'Считаю, не торгуюсь голосом.' : 'Считаю выгоду. Обычно её нет.');
     const accepted = botAcceptsTrade(deal.to, deal);
     addComment(deal.to, tradeThought(deal.to, deal, accepted));
+    if (isBot(deal.from)) {
+      await showBotTradeDecision(deal, accepted);
+    }
     if (accepted) {
       executeTrade(deal);
     } else {
@@ -4220,7 +4428,8 @@ async function offerPurchase(player, cell) {
           : lokhShouldBuy(player, cell);
     const raiseFor = completesSet(player, cell)
       || ((isMiron(player) || isAshot(player)) && cell.group && countOwnedInGroup(player.id, cell.group) >= 1)
-      || ((isMiron(player) || isAshot(player)) && opponentWouldComplete(cell, player.id));
+      || ((isMiron(player) || isAshot(player)) && opponentWouldComplete(cell, player.id))
+      || (isMiron(player) && (cell.type === 'railroad' || (cell.group && mironGroupEdge(cell.group) >= 78)));
     if (want && player.money < cell.price && (isUnluckySmart(player) || isMiron(player) || isAshot(player)) && raiseFor) {
       await botRaiseCash(player, cell.price);
     }

@@ -1586,6 +1586,25 @@ body {
   line-height: 1.45;
 }
 
+.trade-review__verdict {
+  padding: 10px 12px;
+  border-radius: 12px;
+  text-align: center;
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.trade-review__verdict--yes {
+  background: rgba(125, 255, 178, 0.16);
+  color: #7dffb2;
+}
+
+.trade-review__verdict--no {
+  background: rgba(229, 57, 53, 0.16);
+  color: #ffcdd2;
+}
+
 @media (max-width: 640px) {
   .trade-grid {
     grid-template-columns: 1fr;

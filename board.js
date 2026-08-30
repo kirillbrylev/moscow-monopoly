@@ -380,7 +380,7 @@ export const PLAYER_CATALOG = [
     botId: 'miron',
     botKind: 'miron',
     defaultOn: true,
-    blurb: 'сова · спокойный, ходит сам',
+    blurb: 'сова · чемпион мира, считает вероятности',
   },
   {
     key: 'ashot',
