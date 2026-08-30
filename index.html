@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=PT+Serif:wght@700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=offer-center" />
 </head>
 <body>
   <div class="app">
@@ -73,6 +73,8 @@
             </div>
 
             <p class="game-log" id="game-log">За столом Кирилл, Артём, Лох, Март и Мирон. Боты ходят сами и комментируют решения.</p>
+            <div class="property-hover" id="property-preview" hidden></div>
+            <div class="board-offer" id="board-offer" hidden></div>
           </div>
         </div>
       </section>
@@ -89,10 +91,6 @@
           </form>
         </div>
 
-        <h2 class="panel-title">Карточка клетки</h2>
-        <div class="property-preview" id="property-preview">
-          <div class="property-preview__empty">Наведите на клетку или сделайте ход</div>
-        </div>
       </aside>
     </main>
   </div>
@@ -147,6 +145,14 @@
           </span>
           <input type="checkbox" data-seat-key="miron" checked>
         </label>
+        <label class="lobby-seat">
+          <span class="lobby-seat__token" style="--seat-color:#A31545">🍇</span>
+          <span class="lobby-seat__body">
+            <span class="lobby-seat__name">Ашот</span>
+            <span class="lobby-seat__blurb">опытный продавец фруктов из Сочи</span>
+          </span>
+          <input type="checkbox" data-seat-key="ashot" checked>
+        </label>
       </div>
       <p class="lobby__error" id="lobby-error" hidden>Нужно хотя бы двое игроков.</p>
       <div class="lobby__actions">
@@ -156,6 +162,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=offer-center"></script>
 </body>
 </html>

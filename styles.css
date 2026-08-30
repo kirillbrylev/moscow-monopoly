@@ -308,6 +308,17 @@ body {
   color: #ffb74d;
 }
 
+.player-card--ashot {
+  background:
+    linear-gradient(180deg, rgba(163, 21, 69, 0.18), transparent 46%),
+    var(--bg-panel);
+  border-color: rgba(163, 21, 69, 0.4);
+}
+
+.player-card--ashot .player-card__role {
+  color: #f48fb1;
+}
+
 .player-card__badge {
   font-size: 0.65rem;
   padding: 3px 8px;
@@ -818,18 +829,55 @@ body {
   line-height: 1.4;
 }
 
-.property-preview {
-  min-height: 180px;
-  padding: 14px;
+.property-hover {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  transform: translate(-50%, -50%);
+  z-index: 12;
+  width: min(340px, 88%);
+  max-height: min(78%, 420px);
+  overflow: auto;
+  padding: 14px 16px;
   border-radius: 16px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  border: 1px solid rgba(240, 193, 75, 0.5);
+  background: rgba(10, 16, 30, 0.94);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+  text-align: left;
+  pointer-events: none;
 }
 
-.property-preview__empty {
-  color: var(--text-muted);
-  font-size: 0.82rem;
-  line-height: 1.5;
+.property-hover[hidden] {
+  display: none;
+}
+
+.board-offer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 14;
+  width: min(360px, 92%);
+  max-height: 88%;
+  overflow: auto;
+  border-radius: 18px;
+  border: 1px solid rgba(240, 193, 75, 0.5);
+  background: linear-gradient(180deg, #2b3d63 0%, #1e2c4a 100%);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+  text-align: left;
+}
+
+.board-offer[hidden] {
+  display: none;
+}
+
+.board-offer .modal-card {
+  padding: 16px;
+  gap: 12px;
+}
+
+.board-offer .modal-card__title {
+  font-size: 1.05rem;
 }
 
 .property-card {
@@ -966,6 +1014,11 @@ body {
 .player-card__flag--card {
   background: rgba(255, 255, 255, 0.08);
   color: var(--gold);
+}
+
+.player-card__flag--ally {
+  background: rgba(163, 21, 69, 0.22);
+  color: #f48fb1;
 }
 
 .player-card__props {
@@ -1736,6 +1789,10 @@ body {
 
 .commentary-line--miron {
   --line-color: #EF6C00;
+}
+
+.commentary-line--ashot {
+  --line-color: #A31545;
 }
 
 .commentary-line__name {

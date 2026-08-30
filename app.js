@@ -53,7 +53,19 @@ let matchActive = false;
 const logHistory = [];
 const commentHistory = [];
 let usedMartLines = [];
+let usedMironAuctionLines = [];
+let usedMironTradeLines = [];
+let usedAshotVoiceLines = [];
+let usedAshotJokeLines = [];
+let usedAshotTradeLines = [];
+let ashotSpokeThisTurn = false;
+let ashotTurnNote = null;
+let ashotAllyId = null;
+let ashotAllyHooks = 0;
+let ashotBetrayedIds = [];
 let botTurnBad = false;
+let lokhTurnAfraid = false;
+let usedLokhLines = [];
 const COMMENT_LIMIT = 40;
 const BOT_PACE = 2;
 const recentHumanReactions = [];
@@ -65,6 +77,7 @@ const boardEl = document.getElementById('board');
 const tokensLayerEl = document.getElementById('tokens-layer');
 const playerCardsEl = document.getElementById('player-cards');
 const propertyPreviewEl = document.getElementById('property-preview');
+const boardOfferEl = document.getElementById('board-offer');
 const activePlayerNameEl = document.getElementById('active-player-name');
 const gameLogEl = document.getElementById('game-log');
 const rollBtn = document.getElementById('roll-btn');
@@ -168,6 +181,10 @@ function persistGame(message) {
       log: gameLogEl.textContent,
       comments: commentHistory.slice(),
       usedMartLines: usedMartLines.slice(),
+      usedMironAuctionLines: usedMironAuctionLines.slice(),
+      ashotAllyId,
+      ashotAllyHooks,
+      ashotBetrayedIds: ashotBetrayedIds.slice(),
       lastDice: state.lastDice,
       lastDiceTotal: state.lastDiceTotal,
       game: {
@@ -242,6 +259,10 @@ function restoreFromSnapshot(snapshot) {
   migrateHumanNames(state.players);
   restoreComments(snapshot.comments || game.comments);
   usedMartLines = Array.isArray(snapshot.usedMartLines) ? snapshot.usedMartLines.slice() : [];
+  usedMironAuctionLines = Array.isArray(snapshot.usedMironAuctionLines) ? snapshot.usedMironAuctionLines.slice() : [];
+  ashotAllyId = Number.isInteger(snapshot.ashotAllyId) ? snapshot.ashotAllyId : null;
+  ashotAllyHooks = Number(snapshot.ashotAllyHooks) || 0;
+  ashotBetrayedIds = Array.isArray(snapshot.ashotBetrayedIds) ? snapshot.ashotBetrayedIds.slice() : [];
   ensureMironInRoster(snapshot);
 
   if (state.decks.chance.length + state.discards.chance.length < 8) {
@@ -360,7 +381,20 @@ function beginMatch(roster) {
   setDiceReadout(null, null);
   clearComments();
   usedMartLines = [];
+  usedMartTradeLines = [];
+  usedMironAuctionLines = [];
+  usedMironTradeLines = [];
+  usedAshotVoiceLines = [];
+  usedAshotJokeLines = [];
+  usedAshotTradeLines = [];
+  ashotSpokeThisTurn = false;
+  ashotTurnNote = null;
+  ashotAllyId = null;
+  ashotAllyHooks = 0;
+  ashotBetrayedIds = [];
+  usedLokhLines = [];
   botTurnBad = false;
+  lokhTurnAfraid = false;
   clearLog(tableWelcome(roster.map((player) => player.name)));
   skipNextHumanComment = false;
   chatSpeakerId = humanPlayers()[0]?.id ?? 0;
@@ -388,11 +422,9 @@ function handleStartGame() {
     beginMatch(roster);
   } catch (error) {
     console.error(error);
-    hideLobby();
-    if (lobbyErrorEl) {
-      lobbyErrorEl.hidden = false;
-      lobbyErrorEl.textContent = 'Не удалось начать партию. Обновите страницу.';
-    }
+    matchActive = false;
+    showLobby();
+    showLobbyError('Не удалось начать партию. Обновите страницу.');
   }
 }
 
@@ -463,7 +495,7 @@ function renderBoard() {
     `;
 
     cellEl.addEventListener('mouseenter', () => showPropertyPreview(cell));
-    cellEl.addEventListener('mouseleave', () => showPropertyPreview(getCellByPosition(getActivePlayer().position)));
+    cellEl.addEventListener('mouseleave', () => showPropertyPreview(null));
     cellEl.addEventListener('click', () => showPropertyPreview(cell));
 
     boardEl.appendChild(cellEl);
@@ -508,16 +540,18 @@ function getTokenOffsets(count) {
   if (count === 2) return [{ x: -16, y: 6 }, { x: 16, y: -6 }];
   if (count === 3) return [{ x: -18, y: 8 }, { x: 0, y: -10 }, { x: 18, y: 6 }];
   if (count === 4) return [{ x: -16, y: 10 }, { x: 16, y: 10 }, { x: -16, y: -10 }, { x: 16, y: -10 }];
-  return [
-    { x: -18, y: 12 },
-    { x: 18, y: 12 },
-    { x: 0, y: -2 },
-    { x: -18, y: -10 },
-    { x: 18, y: -10 },
-  ];
+  return Array.from({ length: count }, (_, index) => {
+    const angle = (Math.PI * 2 * index) / count - Math.PI / 2;
+    const radius = count >= 6 ? 20 : 16;
+    return {
+      x: Math.round(Math.cos(angle) * radius),
+      y: Math.round(Math.sin(angle) * radius * 0.7),
+    };
+  });
 }
 
 function ensureTokenElements() {
+  if (!tokensLayerEl) return;
   const livingIds = new Set(state.players.map((player) => String(player.id)));
   tokensLayerEl.querySelectorAll('[data-player-id]').forEach((tokenEl) => {
     if (!livingIds.has(tokenEl.dataset.playerId)) tokenEl.remove();
@@ -547,6 +581,7 @@ function ensureTokenElements() {
 }
 
 function renderTokens(animatedPlayerId = null) {
+  if (!tokensLayerEl || !boardEl) return;
   ensureTokenElements();
 
   const wrapperRect = tokensLayerEl.getBoundingClientRect();
@@ -566,7 +601,7 @@ function renderTokens(animatedPlayerId = null) {
 
     const cellmates = playersByCell.get(player.position);
     const indexOnCell = cellmates.findIndex((item) => item.id === player.id);
-    const offset = getTokenOffsets(cellmates.length)[indexOnCell];
+    const offset = getTokenOffsets(cellmates.length)[indexOnCell] || { x: 0, y: 0 };
     const cellRect = cellEl.getBoundingClientRect();
 
     tokenEl.classList.toggle('token--active', player.id === getActivePlayer().id);
@@ -589,6 +624,7 @@ function renderPlayerCards() {
     const card = document.createElement('article');
     card.className = 'player-card';
     if (isMiron(player)) card.classList.add('player-card--miron');
+    else if (isAshot(player)) card.classList.add('player-card--ashot');
     else if (player.isBot) card.classList.add('player-card--bot');
     if (player.botKind === 'lokh') card.classList.add('player-card--lokh');
     if (index === state.activePlayerIndex) card.classList.add('player-card--active');
@@ -608,13 +644,15 @@ function renderPlayerCards() {
 
     const role = isMiron(player)
       ? 'Сова · спокойный, ходит сам'
-      : isUnluckySmart(player)
-        ? 'Утка · умный, очень невезучий'
-        : isLuckyFool(player)
-          ? 'Кот · везучий, глупый'
-          : player.isBot
-            ? 'Бот'
-            : 'Человек';
+      : isAshot(player)
+        ? 'Опытный продавец фруктов из Сочи'
+        : isUnluckySmart(player)
+          ? 'Утка · умный, очень невезучий'
+          : isLuckyFool(player)
+            ? 'Кот · везучий, глупый'
+            : player.isBot
+              ? 'Бот'
+              : 'Человек';
 
     const flags = [];
     if (player.inJail) flags.push('<span class="player-card__flag player-card__flag--jail">В тюрьме</span>');
@@ -622,6 +660,12 @@ function renderPlayerCards() {
       flags.push(`<span class="player-card__flag player-card__flag--card">Выход из тюрьмы × ${player.jailFreeCards.length}</span>`);
     }
     if (player.bankrupt) flags.push('<span class="player-card__flag player-card__flag--jail">Банкрот</span>');
+    const ally = ashotCurrentAlly();
+    if (isAshot(player) && ally) {
+      flags.push(`<span class="player-card__flag player-card__flag--ally">Союз с ${escapeHtml(ally.name)}</span>`);
+    } else if (ally && player.id === ally.id) {
+      flags.push('<span class="player-card__flag player-card__flag--ally">Союз с Ашотом</span>');
+    }
 
     card.innerHTML = `
       <div class="player-card__head">
@@ -654,11 +698,20 @@ function titleOwnerName(cell) {
   return state.players.find((player) => player.id === title.ownerId)?.name ?? 'Банк';
 }
 
+let previewCellId = null;
+
 function showPropertyPreview(cell) {
+  if (!propertyPreviewEl) return;
+  if (boardOfferEl && !boardOfferEl.hidden) return;
   if (!cell) {
-    propertyPreviewEl.innerHTML = '<div class="property-preview__empty">Наведите на клетку или сделайте ход</div>';
+    previewCellId = null;
+    propertyPreviewEl.hidden = true;
+    propertyPreviewEl.innerHTML = '';
     return;
   }
+
+  previewCellId = cell.id;
+  propertyPreviewEl.hidden = false;
 
   const title = state.titles[cell.id];
 
@@ -774,7 +827,7 @@ function refreshUI() {
   updateBank();
   updateActionButtons();
   renderTokens();
-  showPropertyPreview(getCellByPosition(getActivePlayer().position));
+  if (previewCellId != null) showPropertyPreview(BOARD[previewCellId] || null);
   updateChatCompose();
 }
 
@@ -882,9 +935,32 @@ async function animateDiceRoll(finalValues) {
   diceReadoutEl.classList.add('dice-readout--pop');
 }
 
+function isBoardOfferOpen() {
+  return Boolean(boardOfferEl && !boardOfferEl.hidden);
+}
+
+function getModalRoot() {
+  return isBoardOfferOpen() ? boardOfferEl : modalEl;
+}
+
 function openModal(html, options = {}) {
+  const dockBoard = options.dock === 'board' && boardOfferEl;
+  modalEl.classList.toggle('modal--wide', Boolean(options.wide) && !dockBoard);
+
+  if (dockBoard) {
+    modalEl.innerHTML = '';
+    modalOverlayEl.hidden = true;
+    showPropertyPreview(null);
+    boardOfferEl.innerHTML = html;
+    boardOfferEl.hidden = false;
+    return;
+  }
+
+  if (boardOfferEl) {
+    boardOfferEl.hidden = true;
+    boardOfferEl.innerHTML = '';
+  }
   modalEl.innerHTML = html;
-  modalEl.classList.toggle('modal--wide', Boolean(options.wide));
   modalOverlayEl.hidden = false;
 }
 
@@ -892,20 +968,25 @@ function closeModal() {
   modalOverlayEl.hidden = true;
   modalEl.innerHTML = '';
   modalEl.classList.remove('modal--wide');
+  if (boardOfferEl) {
+    boardOfferEl.hidden = true;
+    boardOfferEl.innerHTML = '';
+  }
 }
 
 function waitModalAction() {
   return new Promise((resolve) => {
+    const root = getModalRoot();
     const onClick = (event) => {
       const button = event.target.closest('[data-modal-action]');
-      if (!button || !modalEl.contains(button)) return;
-      modalEl.removeEventListener('click', onClick);
+      if (!button || !root.contains(button)) return;
+      root.removeEventListener('click', onClick);
       resolve({
         action: button.dataset.modalAction,
         cellId: button.dataset.cellId ? Number(button.dataset.cellId) : null,
       });
     };
-    modalEl.addEventListener('click', onClick);
+    root.addEventListener('click', onClick);
   });
 }
 
@@ -1009,7 +1090,7 @@ function clearLog(message) {
 }
 
 function talksInCharacter(player) {
-  return player?.botKind === 'mart' || player?.botKind === 'lokh' || isMiron(player);
+  return player?.botKind === 'mart' || player?.botKind === 'lokh' || isMiron(player) || isAshot(player);
 }
 
 function renderCommentary() {
@@ -1044,17 +1125,39 @@ function pushComment(player, text, options = {}) {
 
 function addComment(player, text) {
   if (!player || !text || !talksInCharacter(player)) return;
-  if (isLuckyFool(player) || isUnluckySmart(player)) return;
+  if (isLuckyFool(player) || isUnluckySmart(player) || isAshot(player)) return;
   pushComment(player, text, { echoLog: true });
 }
 
 const MART_SOUND_FILES = {
   fart: 'sounds/fart.mp3',
+  fart2: 'sounds/fart2.mp3',
+  fart3: 'sounds/fart3.mp3',
+  fart4: 'sounds/fart4.mp3',
   vomit: 'sounds/vomit.mp3',
+  vomit2: 'sounds/vomit2.mp3',
+  vomit3: 'sounds/vomit3.mp3',
+  vomit4: 'sounds/vomit4.mp3',
+  meow1: 'sounds/meow1.wav',
+  meow2: 'sounds/meow2.mp3',
+  meow3: 'sounds/meow3.mp3',
+  meow4: 'sounds/meow4.mp3',
+  meow5: 'sounds/meow5.mp3',
   purr: 'sounds/purr.wav',
   yowl: 'sounds/yowl.mp3',
   diarrhea: 'sounds/diarrhea.mp3',
 };
+
+const MART_SOUND_PACKS = {
+  fart: { names: ['fart', 'fart2', 'fart3', 'fart4'] },
+  vomit: { names: ['vomit', 'vomit2', 'vomit3', 'vomit4'], maxMs: { vomit2: 2200, vomit4: 2200 } },
+  meow: { names: ['meow1', 'meow2', 'meow3', 'meow4', 'meow5'] },
+  purr: { names: ['purr'], maxMs: { purr: 2800 } },
+  yowl: { names: ['yowl'] },
+  diarrhea: { names: ['diarrhea'] },
+};
+
+let lastMartSound = '';
 
 const MART_OK_LINES = [
   'Мурр. Пока миска на месте.',
@@ -1145,7 +1248,7 @@ function playMartClip(name, maxMs) {
   });
   window.clearTimeout(martSoundTimer);
   const audio = getMartSound(name);
-  audio.volume = name === 'purr' ? 0.8 : 0.92;
+  audio.volume = name === 'purr' || name.startsWith('meow') ? 0.8 : 0.92;
   const started = audio.play();
   if (started?.catch) started.catch(() => {});
   if (maxMs) {
@@ -1154,6 +1257,18 @@ function playMartClip(name, maxMs) {
       audio.currentTime = 0;
     }, maxMs);
   }
+}
+
+function playMartPack(kind) {
+  const pack = MART_SOUND_PACKS[kind];
+  if (!pack?.names?.length) return;
+  const names = pack.names.length > 1
+    ? pack.names.filter((name) => name !== lastMartSound)
+    : pack.names;
+  const name = names[Math.floor(Math.random() * names.length)];
+  lastMartSound = name;
+  const maxMs = pack.maxMs?.[name];
+  playMartClip(name, maxMs);
 }
 
 function markBotTurnBad(player) {
@@ -1174,19 +1289,43 @@ const LOKH_BAD_LINES = [
   'вот я лузер',
   'повезло не мне',
   'всем везет но не мне',
+  'я боюсь',
+  'я всё равно проиграю',
+  'мне нельзя везти',
+  'лучше не надо',
+  'это против меня',
+  'я знаю чем кончится',
+  'мне страшно',
+  'опять мимо удачи',
+  'так мне и надо',
+  'я так и думал',
+  'как обычно',
+  'ничего нового',
+  'опять лажа',
 ];
+
+function markLokhAfraid() {
+  lokhTurnAfraid = true;
+}
+
+function lokhAfraid(chance = 0.45) {
+  if (Math.random() >= chance) return false;
+  markLokhAfraid();
+  return true;
+}
 
 function finishMartTurn(player) {
   if (!isLuckyFool(player)) return;
   const bad = botTurnBad || player.bankrupt;
   pushComment(player, pickUnusedMartLine(bad), { echoLog: false });
   if (bad) {
-    playMartClip(Math.random() < 0.5 ? 'yowl' : 'diarrhea');
+    playMartPack(Math.random() < 0.5 ? 'yowl' : 'diarrhea');
   } else {
     const roll = Math.random();
-    if (roll < 0.34) playMartClip('fart');
-    else if (roll < 0.67) playMartClip('vomit');
-    else playMartClip('purr', 2800);
+    if (roll < 0.3) playMartPack('fart');
+    else if (roll < 0.6) playMartPack('meow');
+    else if (roll < 0.9) playMartPack('vomit');
+    else playMartPack('purr');
   }
 }
 
@@ -1218,10 +1357,185 @@ function speakText(text) {
   window.setTimeout(() => synth.speak(utter), 40);
 }
 
+const ASHOT_PRODUCE = ['помидоры', 'персики', 'виноград', 'огурцы', 'арбуз', 'зелень', 'гранат'];
+
+const ASHOT_SHORT_LINES = [
+  'Бери персики, браток',
+  'Помидоры свежие, бери',
+  'Для своих дороже',
+  'Давай меняться',
+  'Не с клетки',
+  'Скидка если две',
+  'Последняя, честно',
+  'Арбуз сладкий',
+  'Улицу продам',
+  'Цена для своих',
+  'Союз. Пока',
+  'Гранат спелый',
+  'Бери, не стой',
+  'Виноград как утро',
+];
+
+function speakAshot(text) {
+  const synth = window.speechSynthesis;
+  if (!synth || !text) return;
+  ashotSpokeThisTurn = true;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'ru-RU';
+  utter.rate = 0.86;
+  utter.pitch = 1.12;
+  const voice = pickRussianVoice();
+  if (voice) utter.voice = voice;
+  synth.cancel();
+  window.setTimeout(() => synth.speak(utter), 40);
+}
+
+function ashotProduceName() {
+  return ASHOT_PRODUCE[Math.floor(Math.random() * ASHOT_PRODUCE.length)];
+}
+
+function ashotCurrentAlly() {
+  if (ashotAllyId == null) return null;
+  const ally = state.players.find((player) => player.id === ashotAllyId && !player.bankrupt);
+  if (!ally) {
+    ashotAllyId = null;
+    ashotAllyHooks = 0;
+    return null;
+  }
+  return ally;
+}
+
+function ashotIsAlly(player) {
+  const ally = ashotCurrentAlly();
+  return Boolean(ally && player && ally.id === player.id);
+}
+
+function ashotPickAlly(ashot) {
+  const taken = new Set(ashotBetrayedIds);
+  let pool = tradePartners(ashot).filter((player) => !taken.has(player.id));
+  if (!pool.length) {
+    ashotBetrayedIds = [];
+    pool = tradePartners(ashot);
+  }
+  if (!pool.length) return null;
+  const ranked = pool.map((player) => {
+    let score = isBot(player) ? 8 : 24;
+    tradeableFreeCells(player).forEach((cell) => {
+      if (completesSet(ashot, cell)) score += 420;
+      else if (cell.group && countOwnedInGroup(ashot.id, cell.group) >= 1) score += 90;
+    });
+    Object.keys(PROPERTY_GROUPS).forEach((group) => {
+      const size = getGroupCells(group).length;
+      const owned = countOwnedInGroup(player.id, group);
+      if (owned === size - 1) score += 140;
+      if (owned >= 1) score += 16;
+    });
+    score += Math.min(player.money, 400) * 0.04;
+    return { player, score: score + Math.random() * 8 };
+  }).sort((a, b) => b.score - a.score);
+  return ranked[0].player;
+}
+
+const ASHOT_ALLY_LINES = [
+  '{name}, слушай. Мы теперь коалиция. Свои люди. Чай общий, улицы потом поделим.',
+  'Союз с {name}. Как на рынке: спина к спине, помидоры пополам.',
+  '{name}, давай коалицию. Я тебя прикрою. Почти бесплатно.',
+  'Официально: {name} теперь свой. Базар это запомнил. Почти честно.',
+];
+
+const ASHOT_BETRAY_LINES = [
+  'Извини, {name}. Коалиция кончилась. Цена выросла, я ж рыночный человек.',
+  'Союз был. Бизнес остался. Не обижайся, {name}, персики всё ещё со скидкой.',
+  '{name}, это не предательство. Это переоценка для своих.',
+  'Мы же свои, {name}. Свои тоже платят. Иначе какой базар?',
+  '{name}, прости. Улица ушла по рынку. Дружба — отдельно, ценник — отдельно.',
+];
+
+function ashotFillName(line, name) {
+  return line.replaceAll('{name}', name);
+}
+
+function ashotAnnounceCoalition(ally) {
+  if (!ally) return;
+  ashotTurnNote = 'Союз. Пока';
+  setLog(`Ашот предлагает коалицию ${ally.name}.`);
+}
+
+function ashotAnnounceBetrayal(ally) {
+  if (!ally) return;
+  ashotTurnNote = 'Цена для своих';
+  setLog(`Ашот предаёт союз с ${ally.name}.`);
+  ashotBetrayedIds.push(ally.id);
+  ashotAllyId = null;
+  ashotAllyHooks = 0;
+}
+
+function ashotMaybeFormCoalition(ashot) {
+  if (ashotCurrentAlly()) return ashotCurrentAlly();
+  const pick = ashotPickAlly(ashot);
+  if (!pick) return null;
+  ashotAllyId = pick.id;
+  ashotAllyHooks = 0;
+  ashotAnnounceCoalition(pick);
+  refreshUI();
+  return pick;
+}
+
+function ashotKeepsStreet(player, cell) {
+  if (!cell) return true;
+  if (cell.group && ownsFullGroup(player.id, cell.group)) return true;
+  if (cell.group && countOwnedInGroup(player.id, cell.group) >= 1) return true;
+  if (cell.type === 'railroad' && countOwnedOfType(player.id, 'railroad') >= 1) return true;
+  if (cell.type === 'utility' && countOwnedOfType(player.id, 'utility') >= 1) return true;
+  return false;
+}
+
+function ashotFlipStreet(player) {
+  const mine = tradeableFreeCells(player).filter((cell) => (
+    !(cell.group && ownsFullGroup(player.id, cell.group)) && !ashotKeepsStreet(player, cell)
+  ));
+  if (!mine.length) return null;
+  const ranked = mine.map((cell) => {
+    let score = isExpensiveStreet(cell) ? 80 : 20;
+    tradePartners(player).forEach((partner) => {
+      if (completesSet(partner, cell)) score += 220;
+      else if (cell.group && countOwnedInGroup(partner.id, cell.group) >= 1) score += 80;
+    });
+    return { cell, score: score + Math.random() * 20 };
+  }).sort((a, b) => b.score - a.score);
+  return ranked[0].cell;
+}
+
+function ashotWantFromTable(player) {
+  const partners = tradePartners(player);
+  for (const partner of partners) {
+    const closer = tradeableFreeCells(partner).find((cell) => completesSet(player, cell));
+    if (closer) return { cell: closer, partner };
+  }
+  for (const partner of partners) {
+    const cheap = tradeableFreeCells(partner).filter((cell) => !isExpensiveStreet(cell));
+    if (cheap.length) return { cell: cheap[Math.floor(Math.random() * cheap.length)], partner };
+  }
+  return null;
+}
+
+function ashotHustleLine() {
+  return ashotTurnNote || pickUnusedLine(ASHOT_SHORT_LINES, usedAshotVoiceLines);
+}
+
+function finishAshotTurn(player) {
+  if (!isAshot(player)) return;
+  if (!ashotCurrentAlly() && tradePartners(player).length) ashotMaybeFormCoalition(player);
+  const line = ashotHustleLine();
+  ashotTurnNote = null;
+  pushComment(player, line, { echoLog: false });
+  speakAshot(line);
+}
+
 function finishLokhTurn(player) {
   if (!isUnluckySmart(player)) return;
-  if (!(botTurnBad || player.bankrupt)) return;
-  const line = LOKH_BAD_LINES[Math.floor(Math.random() * LOKH_BAD_LINES.length)];
+  if (!(botTurnBad || player.bankrupt || lokhTurnAfraid)) return;
+  const line = pickUnusedLine(LOKH_BAD_LINES, usedLokhLines);
   pushComment(player, line, { echoLog: false });
   speakText(line);
 }
@@ -1256,11 +1570,15 @@ function migrateHumanNames(players) {
 }
 
 function tableWelcome(names) {
-  return `За столом ${formatNameList(names)}. Март, Лох и Мирон ходят сами.`;
+  return `За столом ${formatNameList(names)}. Март, Лох, Мирон и Ашот ходят сами.`;
 }
 
 function isMiron(player) {
   return player?.botKind === 'miron' || player?.botId === 'miron' || player?.name === 'Мирон';
+}
+
+function isAshot(player) {
+  return player?.botKind === 'ashot' || player?.botId === 'ashot' || player?.name === 'Ашот';
 }
 
 function isBot(player) {
@@ -1268,7 +1586,8 @@ function isBot(player) {
 }
 
 function usesLuckBias(player) {
-  return player?.botKind === 'mart' || player?.botKind === 'lokh';
+  if (!player || isMiron(player) || isAshot(player)) return false;
+  return player.botKind === 'mart' || player.botKind === 'lokh';
 }
 
 function isLuckyFool(player) {
@@ -1359,6 +1678,13 @@ function martCashReserve(player) {
   return reserve;
 }
 
+function mironWantsOutOfJail(player) {
+  if (martWantsOutOfJail(player)) return true;
+  if (freeTitleCount() >= 8) return true;
+  if (freeTitleCount() >= 3 && player.money >= 180 && !boardIsDangerous(player.id)) return true;
+  return false;
+}
+
 function martWantsOutOfJail(player) {
   const needsBuild = ownedMonopolyGroups(player.id).some((group) => (
     getGroupCells(group).some((cell) => state.titles[cell.id].houses < 3)
@@ -1432,6 +1758,7 @@ function messageMentions(text, bot) {
   if (isLuckyFool(bot)) return /март|кот|кошак/.test(haystack);
   if (isUnluckySmart(bot)) return /лох|утк/.test(haystack);
   if (isMiron(bot)) return /мирон|сов/.test(haystack);
+  if (isAshot(bot)) return /ашот|армян|базар|шашл|виноград|помидор|персик|огурец|арбуз|гранат|зелень|рынок|торг|коалиц|союз|предал|преда/.test(haystack);
   return false;
 }
 
@@ -1457,6 +1784,10 @@ function chatReplyLine(bot, speaker, text) {
       'Написано красиво. Как колбаса, только буквы.',
       'Я согласен, если это про еду. Если нет — тоже ладно.',
     );
+  }
+
+  if (isAshot(bot)) {
+    return pickUnusedLine(ASHOT_SHORT_LINES, usedAshotVoiceLines);
   }
 
   if (isUnluckySmart(bot)) {
@@ -1487,7 +1818,12 @@ function chatReplyLine(bot, speaker, text) {
 }
 
 async function replyToChat(speaker, text, gen) {
-  const mentioned = talkingBots().filter((bot) => messageMentions(text, bot));
+  const haystack = String(text || '').toLowerCase();
+  let mentioned = talkingBots().filter((bot) => messageMentions(text, bot));
+  const ashot = talkingBots().find((bot) => isAshot(bot));
+  if (ashot && !mentioned.includes(ashot) && /улиц|купи|прода|меня|базар|помидор|персик|торг|почём|почем|дорого|дешев/.test(haystack)) {
+    mentioned = mentioned.concat(ashot);
+  }
   const pool = (mentioned.length ? mentioned : talkingBots()).slice().sort(() => Math.random() - 0.5);
   const count = mentioned.length >= 2 ? Math.min(2, pool.length) : Math.min(1, pool.length);
 
@@ -1670,6 +2006,41 @@ function reactionLine(bot, event) {
     return null;
   }
 
+  if (isAshot(bot)) {
+    if (event.type === 'buy') {
+      return pick(
+        `${who} купил «${place}» с клетки. Ай-ай, у Ашота свежее было бы. И ${ashotProduceName()} в придачу.`,
+        `С банка берёт. Смелый. На рынке за такое дядя бы голову покачал.`,
+        `«${place}» ушла без торга. Мне обидно за улицу. И за помидоры, за компанию.`,
+      );
+    }
+    if (event.type === 'pass') {
+      return pick(
+        `${who} не взял «${place}». Правильно. Потом у меня купишь — будет история и пакет.`,
+        `Пас. Вот это я понимаю. Спелый товар любит терпеливых.`,
+        `Не купил. Значит, ещё поторгуемся. Я уже персики подвинул.`,
+      );
+    }
+    if (event.type === 'rent') {
+      return pick(
+        `${who} платит. Надо было меняться раньше, пока улица как ${ashotProduceName()} — мягкая цена.`,
+        `Аренда. Это когда не договорились у прилавка.`,
+        `${owner} взял деньги. Я бы ещё арбуз предложил, для настроения.`,
+      );
+    }
+    if (event.type === 'jail') {
+      return pick(
+        `${who} сел. Плохо: из клетки даже огурец не продашь.`,
+        `Тюрьма. Ашот бы там лоток поставил, но нельзя.`,
+      );
+    }
+    if (Math.random() < 0.4) return ashotHustleLine(bot, who);
+    return pick(
+      `${who} ходит. Я смотрю, что потом можно купить. Или ${ashotProduceName()} отвесить.`,
+      'Прилавок не спит. Если улица зачесалась — зови.',
+    );
+  }
+
   if (event.type === 'roll') {
     if (event.dice?.[0] === event.dice?.[1]) {
       return pick(
@@ -1785,11 +2156,11 @@ async function botsReact(event) {
 function rollDiceFor(player) {
   let first = rollDie();
   let second = rollDie();
+  if (!usesLuckBias(player)) return [first, second];
   if (isUnluckySmart(player) && first + second >= 8 && Math.random() < 0.5) {
     first = rollDie();
     second = rollDie();
-  }
-  if (isLuckyFool(player) && first + second <= 5 && Math.random() < 0.5) {
+  } else if (isLuckyFool(player) && first + second <= 5 && Math.random() < 0.5) {
     first = rollDie();
     second = rollDie();
   }
@@ -1845,53 +2216,142 @@ function scoreLandingLuck(player, position, collectGo) {
   return score;
 }
 
-function mironCashReserve(player) {
-  const monopolies = ownedMonopolyGroups(player.id).length;
-  let reserve = monopolies === 0 ? 240 : 200;
-  const othersDangerous = state.players.some((item) => (
-    item.id !== player.id && !item.bankrupt && countBuildings(item.id).hotels > 0
+function freeTitleCount() {
+  return BOARD.filter((cell) => isTitleCell(cell) && state.titles[cell.id]?.ownerId == null).length;
+}
+
+function opponentWouldComplete(cell, exceptId) {
+  if (!cell.group) return false;
+  const size = getGroupCells(cell.group).length;
+  return state.players.some((item) => (
+    item.id !== exceptId
+    && !item.bankrupt
+    && countOwnedInGroup(item.id, cell.group) === size - 1
   ));
-  if (othersDangerous) reserve += 80;
+}
+
+function boardIsDangerous(exceptId) {
+  return state.players.some((item) => {
+    if (item.id === exceptId || item.bankrupt) return false;
+    const built = countBuildings(item.id);
+    return built.hotels > 0 || built.houses >= 8;
+  });
+}
+
+function mironCashReserve(player) {
+  const free = freeTitleCount();
+  const monopolies = ownedMonopolyGroups(player.id).length;
+  let reserve = free >= 12 ? 80 : free >= 6 ? 120 : 160;
+  if (monopolies > 0) reserve = Math.min(reserve, 110);
+  if (boardIsDangerous(player.id)) reserve += 90;
   return reserve;
 }
 
+function mironCanCover(player, price, leftover = 30) {
+  return player.money >= price || liquidValue(player) >= price + leftover;
+}
+
 function mironShouldBuy(player, cell) {
-  if (player.money < cell.price) return false;
-  const reserve = mironCashReserve(player);
+  if (!mironCanCover(player, cell.price)) return false;
   const after = player.money - cell.price;
-  if (completesSet(player, cell)) return after >= 80;
+  const reserve = mironCashReserve(player);
+
+  if (completesSet(player, cell)) return after >= 20 || mironCanCover(player, cell.price, 40);
+  if (opponentWouldComplete(cell, player.id)) return after >= 10 || mironCanCover(player, cell.price, 20);
+  if (after < 0) return false;
+
   if (cell.type === 'railroad') {
     const rails = countOwnedOfType(player.id, 'railroad');
-    if (rails >= 2) return after >= reserve - 40;
-    if (rails >= 1) return after >= reserve;
-    return after >= reserve + 80;
+    if (rails >= 1) return after >= 40;
+    return after >= Math.min(reserve, 90);
   }
   if (cell.type === 'utility') {
-    return countOwnedOfType(player.id, 'utility') >= 1 && after >= reserve + 150;
+    if (countOwnedOfType(player.id, 'utility') >= 1) return after >= 50;
+    return after >= reserve + 20;
   }
   if (cell.type === 'property') {
-    if (countOwnedInGroup(player.id, cell.group) >= 1) return after >= Math.min(reserve, 160);
-    if (['brown', 'darkblue', 'green'].includes(cell.group)) return after >= reserve + 220;
-    if (groupPriority(cell.group) >= 6) return after >= reserve + 40;
-    return after >= reserve + 160;
+    if (countOwnedInGroup(player.id, cell.group) >= 1) return after >= 30;
+    const free = freeTitleCount();
+    if (groupPriority(cell.group) >= 6) return after >= (free > 8 ? 30 : 60);
+    if (free > 10) return after >= 40;
+    if (groupPriority(cell.group) >= 5) return after >= 70;
+    return after >= Math.min(reserve, 120);
   }
   return false;
 }
 
-function mironMaxBid(player, cell) {
-  const budget = Math.max(0, player.money - Math.min(mironCashReserve(player), 140));
-  if (completesSet(player, cell)) return Math.min(budget, Math.floor(cell.price * 1.3));
-  if (cell.type === 'railroad' && countOwnedOfType(player.id, 'railroad') >= 1) {
-    return Math.min(budget, Math.floor(cell.price * 1.12));
+function isExpensiveStreet(cell) {
+  if (!cell) return false;
+  if (cell.type === 'property' && ['red', 'yellow', 'green', 'darkblue'].includes(cell.group)) return true;
+  return (cell.price || 0) >= 220;
+}
+
+function ashotShouldBuy(player, cell) {
+  const canRaise = liquidValue(player) >= cell.price + 30;
+  const after = player.money - cell.price;
+  if (player.money < cell.price && !canRaise) return false;
+
+  if (completesSet(player, cell)) return after >= 15 || canRaise;
+  if (opponentWouldComplete(cell, player.id)) return after >= 10 || canRaise;
+  if (after < 25) return false;
+
+  if (cell.group && countOwnedInGroup(player.id, cell.group) >= 1) {
+    return !isExpensiveStreet(cell) || after >= 50;
   }
+  if (cell.type === 'railroad') {
+    return countOwnedOfType(player.id, 'railroad') >= 1 ? after >= 35 : after >= 70;
+  }
+  if (cell.type === 'utility') {
+    return countOwnedOfType(player.id, 'utility') >= 1 && after >= 40;
+  }
+  if (isExpensiveStreet(cell)) return false;
+  return freeTitleCount() >= 8 ? after >= 35 : after >= 70;
+}
+
+function ashotMaxBid(player, cell) {
+  const budget = Math.max(0, player.money - 40);
+  if (budget < 15) return 0;
+  if (completesSet(player, cell)) return Math.min(budget, Math.floor(cell.price * 2.05));
+  const ally = ashotCurrentAlly();
+  if (ally && cell.group && completesSet(ally, cell)) {
+    return Math.min(budget, Math.floor(cell.price * 1.75));
+  }
+  if (opponentWouldComplete(cell, player.id)) {
+    const prio = cell.group ? groupPriority(cell.group) : 1;
+    return Math.min(budget, Math.floor(cell.price * (prio >= 6 ? 1.9 : 1.6)));
+  }
+  if (cell.group && countOwnedInGroup(player.id, cell.group) >= 1) {
+    return Math.min(budget, Math.floor(cell.price * 1.42));
+  }
+  if (cell.type === 'railroad' && countOwnedOfType(player.id, 'railroad') >= 1) {
+    return Math.min(budget, Math.floor(cell.price * 1.3));
+  }
+  if (isExpensiveStreet(cell)) return Math.min(budget, Math.floor(cell.price * 0.22));
+  return Math.min(budget, Math.floor(cell.price * 1.12));
+}
+
+function mironMaxBid(player, cell) {
+  const budget = Math.max(0, player.money - Math.min(mironCashReserve(player), 90));
+  if (budget < 20) return 0;
+  if (completesSet(player, cell)) return Math.min(budget, Math.floor(cell.price * 1.85));
+  if (opponentWouldComplete(cell, player.id)) return Math.min(budget, Math.floor(cell.price * 1.6));
   if (cell.type === 'property' && countOwnedInGroup(player.id, cell.group) >= 1) {
-    return Math.min(budget, Math.floor(cell.price * 1.1));
+    return Math.min(budget, Math.floor(cell.price * 1.35));
+  }
+  if (cell.type === 'railroad' && countOwnedOfType(player.id, 'railroad') >= 1) {
+    return Math.min(budget, Math.floor(cell.price * 1.25));
+  }
+  if (cell.type === 'utility' && countOwnedOfType(player.id, 'utility') >= 1) {
+    return Math.min(budget, Math.floor(cell.price * 1.15));
   }
   if (cell.type === 'property' && groupPriority(cell.group) >= 6) {
-    return Math.min(budget, Math.floor(cell.price * 0.85));
+    return Math.min(budget, Math.floor(cell.price * 1.08));
   }
-  if (cell.type === 'railroad') return Math.min(budget, Math.floor(cell.price * 0.7));
-  return Math.min(budget, Math.floor(cell.price * 0.28));
+  if (cell.type === 'railroad') return Math.min(budget, Math.floor(cell.price * 0.95));
+  if (cell.type === 'property' && groupPriority(cell.group) >= 5) {
+    return Math.min(budget, Math.floor(cell.price * 0.92));
+  }
+  return Math.min(budget, Math.floor(cell.price * 0.78));
 }
 
 function martShouldBuy(player, cell) {
@@ -1926,13 +2386,22 @@ function lokhShouldBuy(player, cell) {
 }
 
 function botShouldBuy(player, cell) {
-  if (isUnluckySmart(player)) return martShouldBuy(player, cell);
+  if (isAshot(player)) return ashotShouldBuy(player, cell);
+  if (isUnluckySmart(player)) {
+    if (lokhAfraid(completesSet(player, cell) ? 0.38 : 0.58)) return false;
+    return martShouldBuy(player, cell);
+  }
   if (isLuckyFool(player)) return lokhShouldBuy(player, cell);
   return mironShouldBuy(player, cell);
 }
 
 function botMaxBid(player, cell) {
-  if (isUnluckySmart(player)) return martMaxBid(player, cell);
+  if (isAshot(player)) return ashotMaxBid(player, cell);
+  if (isUnluckySmart(player)) {
+    if (lokhAfraid(0.42)) return 0;
+    const smart = martMaxBid(player, cell);
+    return Math.floor(smart * (lokhAfraid(0.5) ? 0.4 : 0.68));
+  }
   if (isLuckyFool(player)) return lokhMaxBid(player, cell);
   return mironMaxBid(player, cell);
 }
@@ -1972,6 +2441,12 @@ function purchaseThought(player, cell, want) {
     if (want) return `Беру «${cell.name}». Вписывается, и не переплачу.`;
     return `«${cell.name}» дорого и одиноко. Пусть торгуются.`;
   }
+  if (isAshot(player)) {
+    if (want && completesSet(player, cell)) return `Беру «${cell.name}». Редко сам, но ряд надо сомкнуть, браток.`;
+    if (want) return `«${cell.name}» недорогая. Возьму на склад, потом найду хозяина.`;
+    if (isExpensiveStreet(cell)) return `«${cell.name}» с клетки? Ай-ай, дорого и стыдно. Потом у кого-нибудь куплю.`;
+    return `«${cell.name}» подождёт. Ашот лучше поторгуется, чем сам наступит.`;
+  }
   if (isMiron(player)) {
     if (want && completesSet(player, cell)) return `Закрываю «${cell.name}». Теперь соседи будут платить мне за воздух.`;
     if (want && cell.type === 'railroad') return 'Ещё вокзал. Поезда не спрашивают, везучий ты или утка.';
@@ -1983,14 +2458,38 @@ function purchaseThought(player, cell, want) {
   return 'Сложно как-то. Не надо.';
 }
 
+const MIRON_AUCTION_RAISE = [
+  'Одна ставка. Дальше пусть торгуются без моего голоса.',
+  'Ставлю потолок и замолкаю. Аукцион любит тишину.',
+  'Лимит назван. Повторять его бессмысленно.',
+  'Жадность — двигатель, но у меня одна передача.',
+  'Хватит одной цифры. Совы не торгуются вслух.',
+];
+
+const MIRON_AUCTION_PASS = [
+  'Пас. Дорогое геройство плохо греет.',
+  'Дальше не иду. Пусть берут те, кому не спится.',
+  'Цена меня переросла. Я её отпускаю.',
+];
+
+function pickUnusedLine(pool, used) {
+  const left = pool.filter((line) => !used.includes(line));
+  const line = (left.length ? left : pool)[Math.floor(Math.random() * (left.length || pool.length))];
+  used.push(line);
+  return line;
+}
+
 function auctionThought(player, cell, raise) {
   if (isUnluckySmart(player)) {
     return raise ? 'Ставлю. Цена ещё не дурная.' : 'Дороже пользы. Пас.';
   }
+  if (isAshot(player)) {
+    return raise ? 'Ставлю чуть-чуть. Чтобы потом было что продать.' : 'Дорого для банка. Для людей — другой разговор.';
+  }
   if (isMiron(player)) {
     return raise
-      ? 'Ставлю. Жадность — двигатель аукциона, но у меня лимит.'
-      : 'Дальше не иду. Дорогое геройство плохо греет.';
+      ? pickUnusedLine(MIRON_AUCTION_RAISE, usedMironAuctionLines)
+      : pickUnusedLine(MIRON_AUCTION_PASS, usedMironAuctionLines);
   }
   return raise ? 'Повышаю. Вдруг повезёт.' : 'Ладно, не буду.';
 }
@@ -2001,6 +2500,11 @@ function diceThought(player, dice, total) {
     if (total >= 8) return 'Снова восемь. Перебросил — ещё хуже.';
     if (dice[0] === dice[1]) return 'Дубль. Ну хоть это, раз уж везения нет.';
     return `${dice[0]} и ${dice[1]}. Типично.`;
+  }
+  if (isAshot(player)) {
+    if (dice[0] === dice[1]) return `Дубль ${dice[0]}! Как два шашлыка на одном шампуре.`;
+    if (total >= 10) return `${total}. Далеко ушёл. Может, к чужой улице — потом поменяемся.`;
+    return `${dice[0]} и ${dice[1]}. Нормально. Главное не цена на клетке, а разговор после.`;
   }
   if (isMiron(player)) {
     if (dice[0] === dice[1]) return `Дубль ${dice[0]}. Вселенная подмигнула. Я не подмигиваю в ответ.`;
@@ -2019,6 +2523,11 @@ function jailThought(player, action, mustLeave) {
     if (action === 'pay') return mustLeave ? 'Третий ход. Плачу, выбора нет.' : 'Выхожу. Сидеть сейчас невыгодно.';
     return 'Посижу. На улице сейчас только чужие отели.';
   }
+  if (isAshot(player)) {
+    if (action === 'card') return 'Выхожу. В клетке базар не работает, браток.';
+    if (action === 'pay') return 'Плачу полтинник. Дешевле, чем сидеть без сделок.';
+    return 'Кину. Если не выйдет — ладно, один ход без базара.';
+  }
   if (isMiron(player)) {
     if (action === 'card') return 'Трачу «выход». Свобода дешевле, чем слушать, как Март пукает за стенкой.';
     if (action === 'pay') return 'Полтинник за свободу. В Москве и не такое берут за воздух.';
@@ -2033,6 +2542,11 @@ function buildThought(player, cell, built) {
   if (isLuckyFool(player)) {
     return built ? 'Поставлю домик. Красиво будет.' : 'Дома? Потом как-нибудь.';
   }
+  if (isAshot(player)) {
+    return built
+      ? 'Поставлю домик. Чтобы улица не обижалась, что её всё время продают.'
+      : 'Дома потом. Сейчас важнее, у кого что лежит.';
+  }
   if (isMiron(player)) {
     return built
       ? 'Ставлю дом. Пусть платят за вид из окна, которого нет.'
@@ -2043,6 +2557,7 @@ function buildThought(player, cell, built) {
 
 function mortgageThought(player) {
   if (isLuckyFool(player)) return 'Заложу что покрасивее. Наверное.';
+  if (isAshot(player)) return 'Заложу на часок. Это не продажа, это кредит под честное слово.';
   if (isMiron(player)) return 'Заложу лишнее. Монополию не трогаю — это уже почти искусство.';
   return 'Закладываю лишнее. Монополию не трогаю.';
 }
@@ -2104,9 +2619,54 @@ async function botRaiseCash(player, amount) {
   }
 }
 
+function pickMironBuildCell(player) {
+  const groups = ownedMonopolyGroups(player.id)
+    .filter((group) => !groupHasMortgage(group))
+    .sort((a, b) => {
+      const minA = Math.min(...getGroupCells(a).map((cell) => state.titles[cell.id].houses));
+      const minB = Math.min(...getGroupCells(b).map((cell) => state.titles[cell.id].houses));
+      const needA = minA < 3 ? 1 : 0;
+      const needB = minB < 3 ? 1 : 0;
+      if (needA !== needB) return needB - needA;
+      return groupPriority(b) - groupPriority(a);
+    });
+  for (const group of groups) {
+    const cell = pickBuildCell(player, group);
+    if (cell) return cell;
+  }
+  return null;
+}
+
+function botUnmortgageIfWanted(player) {
+  if (!isMiron(player) && !isAshot(player)) return;
+  const mortgaged = ownedCells(player.id).filter((cell) => state.titles[cell.id]?.mortgaged);
+  if (!mortgaged.length) return;
+  mortgaged.sort((a, b) => {
+    const monoA = a.group && ownsFullGroup(player.id, a.group) ? 1 : 0;
+    const monoB = b.group && ownsFullGroup(player.id, b.group) ? 1 : 0;
+    if (monoA !== monoB) return monoB - monoA;
+    return groupPriority(b.group) - groupPriority(a.group);
+  });
+  let redeemed = false;
+  for (const cell of mortgaged) {
+    const cost = getUnmortgageCost(cell);
+    const isMono = Boolean(cell.group && ownsFullGroup(player.id, cell.group));
+    const keep = isMono ? 40 : mironCashReserve(player);
+    if (player.money - cost < keep) continue;
+    unmortgageProperty(player, cell.id);
+    redeemed = true;
+    refreshUI();
+  }
+  if (redeemed) addComment(player, 'Выкупаю залог. Мёртвая улица ренты не приносит.');
+}
+
 async function botBuildIfWanted(player) {
+  if (isMiron(player) || isAshot(player)) botUnmortgageIfWanted(player);
+
   const groups = ownedMonopolyGroups(player.id);
   if (!groups.length) return;
+
+  if (isUnluckySmart(player) && lokhAfraid(0.66)) return;
 
   if (isLuckyFool(player)) {
     if (Math.random() < 0.7) {
@@ -2123,8 +2683,29 @@ async function botBuildIfWanted(player) {
     return;
   }
 
+  if (isMiron(player) || isAshot(player)) {
+    let guard = 0;
+    let builtCell = null;
+    while (guard < 16) {
+      const cell = pickMironBuildCell(player);
+      if (!cell) break;
+      const cost = getHouseCost(cell);
+      const minHouses = Math.min(...getGroupCells(cell.group).map((item) => state.titles[item.id].houses));
+      const reserve = minHouses < 3
+        ? (boardIsDangerous(player.id) ? 70 : 30)
+        : (boardIsDangerous(player.id) ? 140 : 80);
+      if (player.money - cost < reserve) break;
+      buyHouse(player, cell.id);
+      builtCell = cell;
+      refreshUI();
+      guard += 1;
+    }
+    if (builtCell) addComment(player, buildThought(player, builtCell, true));
+    return;
+  }
+
   const ordered = groups.sort((a, b) => groupPriority(b) - groupPriority(a));
-  const reserve = isMiron(player) ? mironCashReserve(player) : martCashReserve(player);
+  const reserve = martCashReserve(player);
   let guard = 0;
   let builtCell = null;
   while (guard < 8) {
@@ -2150,8 +2731,25 @@ async function handleBotJailTurn(player) {
   await botThink(player);
 
   let action = 'roll';
-  if (isUnluckySmart(player) || isMiron(player)) {
-    const wantOut = mustLeave || martWantsOutOfJail(player);
+  if (isUnluckySmart(player)) {
+    if (!mustLeave) {
+      markLokhAfraid();
+      action = 'roll';
+    } else if (lokhAfraid(0.7)) {
+      action = 'roll';
+    } else if (player.jailFreeCards.length) {
+      action = 'card';
+    } else {
+      action = 'pay';
+    }
+  } else if (isAshot(player)) {
+    const hide = boardIsDangerous(player.id) && !ownedMonopolyGroups(player.id).length && freeTitleCount() < 3;
+    const wantOut = mustLeave || !hide;
+    if (wantOut && player.jailFreeCards.length) action = 'card';
+    else if (wantOut && (player.money >= JAIL_FINE + 20 || mustLeave)) action = 'pay';
+    else action = 'roll';
+  } else if (isMiron(player)) {
+    const wantOut = mustLeave || mironWantsOutOfJail(player);
     if (wantOut && player.jailFreeCards.length) action = 'card';
     else if (wantOut && (player.money >= JAIL_FINE + 80 || mustLeave)) action = 'pay';
     else action = 'roll';
@@ -2251,6 +2849,9 @@ async function runBotTurn() {
   botRunning = true;
   updateActionButtons();
   botTurnBad = false;
+  lokhTurnAfraid = false;
+  ashotSpokeThisTurn = false;
+  ashotTurnNote = null;
 
   try {
     if (player.inJail && state.turnPhase === 'pre-roll') {
@@ -2268,9 +2869,11 @@ async function runBotTurn() {
       ) {
         await botThink(player, isLuckyFool(player)
           ? 'Сейчас кину. Секунду.'
-          : isMiron(player)
-            ? 'Кубики не умеют врать. Люди — сколько угодно.'
-            : 'Считаю бросок.');
+          : isAshot(player)
+            ? 'Кидаю. Потом посмотрим, у кого что купить.'
+            : isMiron(player)
+              ? 'Кубики не умеют врать. Люди — сколько угодно.'
+              : 'Считаю бросок.');
         if (!botTurnAlive(gen, player) || !isBot(player)) break;
         await handleRoll();
         await botSleep(500);
@@ -2278,6 +2881,9 @@ async function runBotTurn() {
 
       if (botTurnAlive(gen, player) && isBot(player) && state.turnPhase === 'post-land' && !player.inJail) {
         await botBuildIfWanted(player);
+        if (botTurnAlive(gen, player) && (isLuckyFool(player) || isMiron(player) || isAshot(player))) {
+          await botTryTrade(player);
+        }
       }
     }
   } finally {
@@ -2289,6 +2895,7 @@ async function runBotTurn() {
   if (gameGen !== gen) return;
   finishMartTurn(player);
   finishLokhTurn(player);
+  finishAshotTurn(player);
   if (state.winnerId != null) return;
   if (getActivePlayer() !== player) return;
   if (!isBot(player)) return;
@@ -2977,32 +3584,519 @@ function scoreTradeForBot(bot, deal) {
   };
 }
 
+function tradeableFreeCells(player) {
+  return tradeableCells(player).filter((cell) => canTradeTitle(cell));
+}
+
+function martWantsToTrade(player) {
+  const mine = tradeableFreeCells(player);
+  const almost = Object.keys(PROPERTY_GROUPS).some((group) => {
+    const cells = getGroupCells(group);
+    const owned = countOwnedInGroup(player.id, group);
+    return owned === cells.length - 1 && cells.some((cell) => {
+      const ownerId = state.titles[cell.id]?.ownerId;
+      return ownerId != null && ownerId !== player.id;
+    });
+  });
+  if (almost) return Math.random() < 0.88;
+  if (!mine.length && player.money < 80) return false;
+  return Math.random() < 0.64;
+}
+
+function pickShinyStreet(buyer, seller) {
+  const cells = tradeableFreeCells(seller);
+  if (!cells.length) return null;
+  const ranked = cells.map((cell) => ({
+    cell,
+    score: propertyDealValue(buyer, cell, true) + (cell.price || 0) * 0.15 + Math.random() * 50,
+  })).sort((a, b) => b.score - a.score);
+  return ranked[0].cell;
+}
+
+function pickSpareStreet(owner, avoidId) {
+  const cells = tradeableFreeCells(owner).filter((cell) => (
+    cell.id !== avoidId && !(cell.group && ownsFullGroup(owner.id, cell.group))
+  ));
+  if (!cells.length) return null;
+  const ranked = cells.map((cell) => ({
+    cell,
+    score: -propertyDealValue(owner, cell, false) + Math.random() * 40,
+  })).sort((a, b) => b.score - a.score);
+  return ranked[0].cell;
+}
+
+function buildMartTrade(mart) {
+  const partners = tradePartners(mart).sort((a, b) => {
+    const humanFirst = Number(isBot(a)) - Number(isBot(b));
+    return humanFirst || Math.random() - 0.5;
+  });
+
+  for (const partner of partners) {
+    const want = pickShinyStreet(mart, partner);
+    if (!want) continue;
+    const offer = pickSpareStreet(mart, want.id);
+    const gap = Math.max(0, (want.price || 0) - (offer?.price || 0));
+    const giveMoney = offer
+      ? Math.min(mart.money, Math.floor(gap * (0.25 + Math.random() * 0.55)))
+      : Math.min(mart.money, Math.max(60, Math.floor((want.price || 80) * (0.35 + Math.random() * 0.4))));
+    const deal = {
+      from: mart,
+      to: partner,
+      giveCells: offer ? [offer] : [],
+      getCells: [want],
+      giveMoney,
+      getMoney: 0,
+      giveCards: 0,
+      getCards: 0,
+    };
+    if (!dealHasContent(deal)) continue;
+    if (validateTrade(deal)) continue;
+    return deal;
+  }
+  return null;
+}
+
+const MART_TRADE_OFFERS = [
+  'Давай меняться. Вон то блестит.',
+  'Хочу вот это. Можно? Я кот, мне можно.',
+  'Обмен. Я почти понял, зачем.',
+  'Ты берёшь моё, я беру красивое. Честно же?',
+  'Поторгуемся. Мне скучно сидеть на своих улицах.',
+];
+
+let usedMartTradeLines = [];
+
+function ashotAskPrice(cell, partner) {
+  let ask = cell.price || 80;
+  if (completesSet(partner, cell)) {
+    const house = getHouseCost(cell);
+    ask = Math.min(partner.money - 8, Math.max(Math.floor(ask * 1.7), partner.money - house * 2));
+  } else if (cell.group && countOwnedInGroup(partner.id, cell.group) >= 1) {
+    ask = Math.floor(ask * (isBot(partner) ? 1.18 : 1.35));
+  } else if (isExpensiveStreet(cell)) {
+    ask = Math.floor(ask * (isBot(partner) ? 1.08 : 1.28));
+  } else {
+    ask = Math.floor(ask * (isBot(partner) ? 0.92 : 1.12));
+  }
+  if (isUnluckySmart(partner)) ask = Math.floor(ask * 0.72);
+  if (isMiron(partner)) ask = Math.floor(ask * 0.78);
+  if (isLuckyFool(partner)) ask = Math.floor(ask * 1.12);
+  if (ashotIsAlly(partner) && ashotAllyHooks >= 1) ask = Math.floor(ask * 1.45);
+  else if (ashotIsAlly(partner)) ask = Math.floor(ask * 0.96);
+  return Math.max(20, Math.min(Math.max(0, partner.money - 8), ask));
+}
+
+function ashotPayToWin(cell, seller, ashot) {
+  const value = propertyDealValue(seller, cell, false);
+  let pay = value;
+  if (isLuckyFool(seller)) pay = Math.floor(value * 0.52);
+  else if (isUnluckySmart(seller)) pay = value + 95;
+  else if (isMiron(seller)) pay = value + 55;
+  else pay = Math.floor((cell.price || 80) * 0.8);
+  if (completesSet(ashot, cell)) pay = Math.max(pay, Math.min(ashot.money - 30, Math.floor((cell.price || 80) * 1.05)));
+  if (ashotIsAlly(seller) && ashotAllyHooks >= 1) pay = Math.min(pay, Math.floor(pay * 0.7));
+  return Math.max(15, Math.min(Math.max(0, ashot.money - 30), pay));
+}
+
+function ashotPayPrice(cell, seller, ashot) {
+  return ashotPayToWin(cell, seller, ashot);
+}
+
+function ashotWouldArm(partner, cell) {
+  if (!completesSet(partner, cell)) return false;
+  const cost = getHouseCost(cell);
+  return partner.money - ashotAskPrice(cell, partner) >= cost * 3;
+}
+
+function ashotAlmostSetStreet(owner) {
+  return tradeableFreeCells(owner).find((cell) => {
+    if (!cell.group) return false;
+    const size = getGroupCells(cell.group).length;
+    return countOwnedInGroup(owner.id, cell.group) === size - 1;
+  }) || null;
+}
+
+function buildAshotHookTrade(ashot, ally, skipIds) {
+  const useful = tradeableFreeCells(ally).filter((cell) => (
+    !skipIds.includes(cell.id)
+    && (completesSet(ashot, cell) || (cell.group && countOwnedInGroup(ashot.id, cell.group) >= 1))
+  ));
+  const pool = useful.length ? useful : tradeableFreeCells(ally).filter((cell) => (
+    !skipIds.includes(cell.id) && !ashotKeepsStreet(ally, cell)
+  ));
+  if (!pool.length) return null;
+  const want = useful[0] || pool[0];
+  const pay = ashotPayToWin(want, ally, ashot);
+  const deal = {
+    from: ashot,
+    to: ally,
+    giveCells: [],
+    getCells: [want],
+    giveMoney: pay,
+    getMoney: 0,
+    giveCards: 0,
+    getCards: 0,
+  };
+  return validateTrade(deal) ? null : deal;
+}
+
+function buildAshotBetrayTrade(ashot, ally, skipIds) {
+  const deny = ashotAlmostSetStreet(ally);
+  if (deny && !skipIds.includes(deny.id)) {
+    let pay = ashotPayPrice(deny, ally, ashot);
+    if (isUnluckySmart(ally)) pay = Math.max(pay, Math.floor((deny.price || 80) + 80));
+    if (isMiron(ally)) pay = Math.max(pay, (deny.price || 80) + 45);
+    const deal = {
+      from: ashot,
+      to: ally,
+      giveCells: [],
+      getCells: [deny],
+      giveMoney: Math.min(Math.max(0, ashot.money - 30), pay),
+      getMoney: 0,
+      giveCards: 0,
+      getCards: 0,
+    };
+    if (!validateTrade(deal)) return deal;
+  }
+
+  const mine = tradeableFreeCells(ally).find((cell) => completesSet(ashot, cell) && !skipIds.includes(cell.id));
+  if (mine) {
+    const deal = {
+      from: ashot,
+      to: ally,
+      giveCells: [],
+      getCells: [mine],
+      giveMoney: ashotPayPrice(mine, ally, ashot),
+      getMoney: 0,
+      giveCards: 0,
+      getCards: 0,
+    };
+    if (!validateTrade(deal)) return deal;
+  }
+
+  return null;
+}
+
+async function proposeAshotDeal(ashot, deal) {
+  setLog(`${ashot.name} предлагает сделку ${deal.to.name}.`);
+  await resolveTrade(deal);
+}
+
+function ashotWantsToTrade(player) {
+  if (!tradeableFreeCells(player).length && player.money < 80) return false;
+  return tradePartners(player).some((partner) => tradeableFreeCells(partner).length) || tradeableFreeCells(player).length > 0;
+}
+
+function buildAshotTrade(ashot, skipIds = []) {
+  const partners = tradePartners(ashot).sort((a, b) => {
+    const closeA = tradeableFreeCells(a).some((cell) => completesSet(ashot, cell)) ? 1 : 0;
+    const closeB = tradeableFreeCells(b).some((cell) => completesSet(ashot, cell)) ? 1 : 0;
+    return closeB - closeA || Number(!isBot(a)) - Number(!isBot(b));
+  });
+  const canSell = (cell) => (
+    !skipIds.includes(cell.id)
+    && !(cell.group && ownsFullGroup(ashot.id, cell.group))
+    && !ashotKeepsStreet(ashot, cell)
+  );
+  const makeBuy = (partner, cell, pay) => {
+    const deal = {
+      from: ashot,
+      to: partner,
+      giveCells: [],
+      getCells: [cell],
+      giveMoney: pay,
+      getMoney: 0,
+      giveCards: 0,
+      getCards: 0,
+    };
+    return validateTrade(deal) ? null : deal;
+  };
+
+  for (const partner of partners) {
+    const closer = tradeableFreeCells(partner).find((cell) => !skipIds.includes(cell.id) && completesSet(ashot, cell));
+    if (!closer) continue;
+    const deal = makeBuy(partner, closer, ashotPayToWin(closer, partner, ashot));
+    if (deal) return deal;
+  }
+
+  for (const partner of partners) {
+    const deny = ashotAlmostSetStreet(partner);
+    if (!deny || skipIds.includes(deny.id)) continue;
+    if ((deny.group ? groupPriority(deny.group) : 0) < 5) continue;
+    const deal = makeBuy(partner, deny, ashotPayToWin(deny, partner, ashot));
+    if (deal) return deal;
+  }
+
+  for (const partner of partners) {
+    const closers = tradeableFreeCells(ashot).filter((cell) => canSell(cell) && completesSet(partner, cell));
+    if (!closers.length) continue;
+    const cell = closers.sort((a, b) => groupPriority(b.group) - groupPriority(a.group))[0];
+    if (ashotWouldArm(partner, cell)) continue;
+    const getMoney = Math.max(ashotAskPrice(cell, partner), Math.floor((cell.price || 80) * 1.8));
+    if (getMoney < (cell.price || 80) * 1.5) continue;
+    if (getMoney < partner.money * 0.55) continue;
+    const deal = {
+      from: ashot,
+      to: partner,
+      giveCells: [cell],
+      getCells: [],
+      giveMoney: 0,
+      getMoney: Math.min(partner.money - 8, getMoney),
+      giveCards: 0,
+      getCards: 0,
+    };
+    if (!validateTrade(deal)) return deal;
+  }
+
+  for (const partner of partners) {
+    const want = tradeableFreeCells(partner).find((cell) => (
+      !skipIds.includes(cell.id)
+      && cell.group
+      && countOwnedInGroup(ashot.id, cell.group) >= 1
+      && !completesSet(partner, cell)
+    )) || pickShinyStreet(ashot, partner);
+    if (!want || skipIds.includes(want.id)) continue;
+    const deal = makeBuy(partner, want, ashotPayToWin(want, partner, ashot));
+    if (deal) return deal;
+  }
+  return null;
+}
+
+async function botTryTrade(player) {
+  if (isAshot(player) && ashotWantsToTrade(player)) {
+    ashotMaybeFormCoalition(player);
+    const skipIds = [];
+    const mark = (deal) => deal.giveCells.concat(deal.getCells).forEach((cell) => skipIds.push(cell.id));
+    let rounds = 0;
+    const ally = ashotCurrentAlly();
+
+    if (ally && ashotAllyHooks < 1) {
+      const hook = buildAshotHookTrade(player, ally, skipIds);
+      if (hook) {
+        await proposeAshotDeal(player, hook);
+        ashotAllyHooks += 1;
+        mark(hook);
+        rounds += 1;
+      } else {
+        ashotAllyHooks = 1;
+      }
+    }
+
+    if (rounds < 2 && ally && ashotAllyHooks >= 1) {
+      const knife = buildAshotBetrayTrade(player, ally, skipIds);
+      if (knife) {
+        await proposeAshotDeal(player, knife);
+        ashotAnnounceBetrayal(ally);
+        mark(knife);
+        rounds += 1;
+      }
+    }
+
+    while (rounds < 3) {
+      const deal = buildAshotTrade(player, skipIds);
+      if (!deal) break;
+      const cutAlly = ashotCurrentAlly();
+      const knife = cutAlly && deal.to.id === cutAlly.id && ashotAllyHooks >= 1;
+      await proposeAshotDeal(player, deal);
+      if (knife) ashotAnnounceBetrayal(cutAlly);
+      mark(deal);
+      rounds += 1;
+    }
+    return;
+  }
+
+  let deal = null;
+  if (isLuckyFool(player) && martWantsToTrade(player)) {
+    deal = buildMartTrade(player);
+    if (deal) pushComment(player, pickUnusedLine(MART_TRADE_OFFERS, usedMartTradeLines), { echoLog: false });
+  } else if (isMiron(player) && mironWantsToTrade(player)) {
+    deal = buildMironTrade(player);
+    if (deal) addComment(player, pickUnusedLine(MIRON_TRADE_OFFERS, usedMironTradeLines));
+  }
+  if (!deal) return;
+  setLog(`${player.name} предлагает сделку ${deal.to.name}.`);
+  await resolveTrade(deal);
+}
+
+function givesAlmostSet(bot, deal) {
+  return deal.getCells.some((cell) => {
+    if (!cell.group) return false;
+    const size = getGroupCells(cell.group).length;
+    return countOwnedInGroup(bot.id, cell.group) === size - 1;
+  });
+}
+
+function completesOpponentSet(deal) {
+  return deal.getCells.some((cell) => completesSet(deal.from, cell));
+}
+
+function tradeSetPriority(cells) {
+  return cells.reduce((best, cell) => Math.max(best, cell.group ? groupPriority(cell.group) : 0), 0);
+}
+
+function findMironClosingStreets(player) {
+  return Object.keys(PROPERTY_GROUPS)
+    .map((group) => {
+      const cells = getGroupCells(group);
+      const owned = countOwnedInGroup(player.id, group);
+      if (owned !== cells.length - 1) return null;
+      const missing = cells.find((cell) => {
+        const ownerId = state.titles[cell.id]?.ownerId;
+        return ownerId != null && ownerId !== player.id && canTradeTitle(cell);
+      });
+      return missing ? { cell: missing, priority: groupPriority(group) } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.priority - a.priority);
+}
+
+function titleOwner(cell) {
+  const ownerId = state.titles[cell.id]?.ownerId;
+  return state.players.find((item) => item.id === ownerId) || null;
+}
+
+function pickMironOfferStreet(miron, partner, want) {
+  const ours = tradeableFreeCells(miron).filter((cell) => {
+    if (cell.id === want.id) return false;
+    if (cell.group && ownsFullGroup(miron.id, cell.group)) return false;
+    if (cell.group) {
+      const size = getGroupCells(cell.group).length;
+      if (countOwnedInGroup(miron.id, cell.group) === size - 1) return false;
+    }
+    if (completesSet(partner, cell) && groupPriority(want.group) < (cell.group ? groupPriority(cell.group) : 0) + 2) {
+      return false;
+    }
+    return true;
+  });
+  if (!ours.length) return null;
+  ours.sort((a, b) => {
+    const completeA = completesSet(partner, a) ? -4 : 0;
+    const completeB = completesSet(partner, b) ? -4 : 0;
+    const helpA = a.group && countOwnedInGroup(partner.id, a.group) >= 1 ? 2 : 0;
+    const helpB = b.group && countOwnedInGroup(partner.id, b.group) >= 1 ? 2 : 0;
+    const junkA = a.group && countOwnedInGroup(miron.id, a.group) <= 1 ? 1 : 0;
+    const junkB = b.group && countOwnedInGroup(miron.id, b.group) <= 1 ? 1 : 0;
+    return (completeB + helpB + junkB) - (completeA + helpA + junkA);
+  });
+  return ours[0];
+}
+
+function mironWantsToTrade(player) {
+  if (findMironClosingStreets(player).length) return true;
+  return Math.random() < 0.42;
+}
+
+function buildMironTrade(miron) {
+  for (const { cell: want } of findMironClosingStreets(miron)) {
+    const partner = titleOwner(want);
+    if (!partner || partner.bankrupt) continue;
+    const offer = pickMironOfferStreet(miron, partner, want);
+    const gap = Math.max(0, (want.price || 0) - (offer?.price || 0));
+    let giveMoney = Math.floor(gap * (isLuckyFool(partner) ? 0.4 : isUnluckySmart(partner) ? 1.05 : 0.9));
+    if (!offer) giveMoney = Math.max(giveMoney, Math.floor((want.price || 80) * (isBot(partner) ? 0.85 : 0.7)));
+    giveMoney = Math.max(0, Math.min(miron.money - 70, giveMoney));
+    if (!offer && giveMoney < (want.price || 80) * 0.45) continue;
+    const deal = {
+      from: miron,
+      to: partner,
+      giveCells: offer ? [offer] : [],
+      getCells: [want],
+      giveMoney,
+      getMoney: 0,
+      giveCards: 0,
+      getCards: 0,
+    };
+    if (!dealHasContent(deal) || validateTrade(deal)) continue;
+    return deal;
+  }
+
+  const partners = tradePartners(miron).sort((a, b) => Number(!isBot(a)) - Number(!isBot(b)));
+  for (const partner of partners) {
+    const want = pickShinyStreet(miron, partner);
+    if (!want || !want.group) continue;
+    if (countOwnedInGroup(miron.id, want.group) < 1) continue;
+    if (completesSet(miron, want)) continue;
+    const offer = pickMironOfferStreet(miron, partner, want);
+    const giveMoney = Math.min(
+      Math.max(0, miron.money - 90),
+      Math.floor(((want.price || 80) - (offer?.price || 0)) * 0.55),
+    );
+    const deal = {
+      from: miron,
+      to: partner,
+      giveCells: offer ? [offer] : [],
+      getCells: [want],
+      giveMoney: Math.max(0, giveMoney),
+      getMoney: 0,
+      giveCards: 0,
+      getCards: 0,
+    };
+    if (!dealHasContent(deal) || validateTrade(deal)) continue;
+    return deal;
+  }
+  return null;
+}
+
+const MIRON_TRADE_OFFERS = [
+  'Меняемся. Мне нужна эта улица, тебе — арифметика.',
+  'Предлагаю обмен. Я считал дважды.',
+  'Сделка без поэзии: клетки на клетки.',
+  'Бери моё лишнее. Мне нужно сомкнуть ряд.',
+];
+
 function botAcceptsTrade(bot, deal) {
   const score = scoreTradeForBot(bot, deal);
 
   if (score.cashAfter < 0) return false;
-  if (score.givesMonopoly && !score.completes) return false;
+  if (score.givesMonopoly && !score.completes && !isLuckyFool(bot)) return false;
+  if (score.givesMonopoly && !score.completes) return Math.random() < 0.12;
   if (score.giveValue >= 80 && score.receiveValue + deal.giveMoney + deal.giveCards * 140 < score.giveValue * 0.75) {
-    return isLuckyFool(bot) && score.net >= -40 && Math.random() < 0.15;
+    if (isLuckyFool(bot)) return score.net >= -70 || Math.random() < 0.45;
+    return false;
   }
-  if (score.gives.length && !score.receives.length && deal.giveMoney < score.giveValue * 0.85) return false;
+  if (score.gives.length && !score.receives.length && deal.giveMoney < score.giveValue * 0.85) {
+    if (isLuckyFool(bot)) return deal.giveMoney >= score.giveValue * 0.45 && Math.random() < 0.4;
+    return false;
+  }
 
   if (isLuckyFool(bot)) {
     if (score.completes) return true;
-    if (score.receives.length && score.net >= -40) return true;
-    if (score.receives.length) return score.net >= -90 && Math.random() < 0.28;
-    return score.net >= 100;
+    if (score.receives.length && score.net >= -80) return true;
+    if (score.receives.length) return Math.random() < 0.58;
+    return score.net >= 40 || Math.random() < 0.32;
+  }
+
+  if (isAshot(bot)) {
+    if (score.givesMonopoly && !score.completes) return false;
+    if (givesAlmostSet(bot, deal) && !score.completes) return false;
+    if (completesOpponentSet(deal) && !score.completes) return false;
+    if (score.gives.some((cell) => ashotKeepsStreet(bot, cell)) && !score.completes) return false;
+    if (score.cashAfter < 60) return false;
+    if (score.gives.length && !score.receives.length) {
+      return deal.giveMoney >= score.giveValue * 1.7 && score.net >= 80;
+    }
+    if (score.gives.length && score.net < 90) return false;
+    if (score.completes && score.net >= 15) return true;
+    if (score.receives.length && !score.gives.length && score.net >= 25) return true;
+    return score.net >= 110;
   }
 
   if (isUnluckySmart(bot)) {
-    if (score.cashAfter < 80 && deal.getMoney > deal.giveMoney) return false;
-    if (score.completes && score.net >= -40) return true;
-    return score.net >= 40;
+    if (lokhAfraid(0.52)) return false;
+    if (score.cashAfter < 140 && deal.getMoney > deal.giveMoney) return false;
+    if (score.completes && score.net >= 20) return true;
+    return score.net >= 90;
   }
 
-  if (score.cashAfter < 100 && deal.getMoney > deal.giveMoney) return false;
-  if (score.completes && score.net >= -20) return true;
-  return score.net >= 70;
+  if (givesAlmostSet(bot, deal) && !score.completes) return false;
+  if (completesOpponentSet(deal) && !score.completes) return false;
+  if (completesOpponentSet(deal) && score.completes && tradeSetPriority(deal.getCells) > tradeSetPriority(deal.giveCells)) {
+    return false;
+  }
+  if (score.cashAfter < 70 && deal.getMoney > deal.giveMoney) return false;
+  if (score.completes && score.cashAfter >= 50 && score.net >= -50) return true;
+  if (score.completes && score.net >= -90 && tradeSetPriority(deal.giveCells) >= 6) return true;
+  return score.net >= 45;
 }
 
 function tradeThought(player, deal, accepted) {
@@ -3014,6 +4108,14 @@ function tradeThought(player, deal, accepted) {
       : score.giveValue > score.receiveValue
         ? 'Не-а. Вы просите красивое, а даёте скучное.'
         : 'Не хочу. Мне и так нормально.';
+  }
+  if (isAshot(player)) {
+    if (ashotIsAlly(deal.from) && !accepted) {
+      return `Мы союзники, ${deal.from.name}, но так не базар. Дружба дружбой, ценник отдельно.`;
+    }
+    return accepted
+      ? `Беру. Честно, почти как родному. Плюс примерно ₽ ${formatMoney(score.net)}.`
+      : `Не-е, браток. Так не базар. Мне минус ₽ ${formatMoney(Math.abs(score.net))}.`;
   }
   if (isUnluckySmart(player)) {
     return accepted
@@ -3068,7 +4170,7 @@ async function confirmHumanTrade(deal) {
         <button class="btn-ghost" data-modal-action="reject" type="button">Отклонить</button>
       </div>
     </div>
-  `);
+  `, { dock: 'board' });
   const { action } = await waitModalAction();
   closeModal();
   return action === 'accept';
@@ -3146,12 +4248,17 @@ async function handleTrade() {
 
 async function offerPurchase(player, cell) {
   if (isBot(player)) {
-    let want = isUnluckySmart(player)
-      ? martShouldBuy(player, cell)
-      : isMiron(player)
-        ? mironShouldBuy(player, cell)
-        : lokhShouldBuy(player, cell);
-    if (want && player.money < cell.price && (isUnluckySmart(player) || isMiron(player)) && completesSet(player, cell)) {
+    let want = isAshot(player)
+      ? ashotShouldBuy(player, cell)
+      : isUnluckySmart(player)
+        ? martShouldBuy(player, cell)
+        : isMiron(player)
+          ? mironShouldBuy(player, cell)
+          : lokhShouldBuy(player, cell);
+    const raiseFor = completesSet(player, cell)
+      || ((isMiron(player) || isAshot(player)) && cell.group && countOwnedInGroup(player.id, cell.group) >= 1)
+      || ((isMiron(player) || isAshot(player)) && opponentWouldComplete(cell, player.id));
+    if (want && player.money < cell.price && (isUnluckySmart(player) || isMiron(player) || isAshot(player)) && raiseFor) {
       await botRaiseCash(player, cell.price);
     }
     want = want && player.money >= cell.price;
@@ -3244,7 +4351,7 @@ async function runAuction(cell) {
     if (isBot(player)) {
       const maxBid = Math.min(botMaxBid(player, cell), player.money);
       const raise = minBid <= maxBid;
-      if (!spoken.has(player.id)) {
+      if (isMiron(player) && !spoken.has(player.id)) {
         addComment(player, auctionThought(player, cell, raise));
         spoken.add(player.id);
       }
@@ -3252,9 +4359,8 @@ async function runAuction(cell) {
       if (raise) {
         currentBid = maxBid;
         leaderId = player.id;
-      } else {
-        passed.add(player.id);
       }
+      passed.add(player.id);
       turnIndex = (turnIndex + 1) % bidders.length;
       continue;
     }

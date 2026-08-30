@@ -382,6 +382,17 @@ export const PLAYER_CATALOG = [
     defaultOn: true,
     blurb: 'сова · спокойный, ходит сам',
   },
+  {
+    key: 'ashot',
+    name: 'Ашот',
+    token: '🍇',
+    color: '#A31545',
+    isBot: true,
+    botId: 'ashot',
+    botKind: 'ashot',
+    defaultOn: true,
+    blurb: 'опытный продавец фруктов из Сочи',
+  },
 ];
 
 export const PLAYERS = PLAYER_CATALOG
