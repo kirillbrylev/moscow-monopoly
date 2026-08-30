@@ -78,6 +78,7 @@ const tokensLayerEl = document.getElementById('tokens-layer');
 const playerCardsEl = document.getElementById('player-cards');
 const propertyPreviewEl = document.getElementById('property-preview');
 const boardOfferEl = document.getElementById('board-offer');
+const tradeFeedEl = document.getElementById('trade-feed');
 const activePlayerNameEl = document.getElementById('active-player-name');
 const gameLogEl = document.getElementById('game-log');
 const rollBtn = document.getElementById('roll-btn');
@@ -375,7 +376,8 @@ function beginMatch(roster) {
   matchActive = true;
   botRunning = false;
   if (tokensLayerEl) tokensLayerEl.innerHTML = '';
-  applyState(freshState(roster));
+  const seats = shuffle(roster.slice());
+  applyState(freshState(seats));
   setDieRotation(0, 1, false);
   setDieRotation(1, 1, false);
   setDiceReadout(null, null);
@@ -395,7 +397,7 @@ function beginMatch(roster) {
   usedLokhLines = [];
   botTurnBad = false;
   lokhTurnAfraid = false;
-  clearLog(tableWelcome(roster.map((player) => player.name)));
+  clearLog(`${tableWelcome(seats.map((player) => player.name))} Первым ходит ${seats[0].name}.`);
   skipNextHumanComment = false;
   chatSpeakerId = humanPlayers()[0]?.id ?? 0;
   refreshUI();
@@ -3963,14 +3965,14 @@ async function botTryTrade(player) {
     ashotMaybeFormCoalition(player);
     const skipIds = [];
     const mark = (deal) => deal.giveCells.concat(deal.getCells).forEach((cell) => skipIds.push(cell.id));
+    const planned = [];
     let rounds = 0;
     const ally = ashotCurrentAlly();
 
     if (ally && ashotAllyHooks < 1) {
       const hook = buildAshotHookTrade(player, ally, skipIds);
       if (hook) {
-        await proposeAshotDeal(player, hook);
-        ashotAllyHooks += 1;
+        planned.push({ deal: hook, after: () => { ashotAllyHooks += 1; } });
         mark(hook);
         rounds += 1;
       } else {
@@ -3981,8 +3983,7 @@ async function botTryTrade(player) {
     if (rounds < 2 && ally && ashotAllyHooks >= 1) {
       const knife = buildAshotBetrayTrade(player, ally, skipIds);
       if (knife) {
-        await proposeAshotDeal(player, knife);
-        ashotAnnounceBetrayal(ally);
+        planned.push({ deal: knife, after: () => ashotAnnounceBetrayal(ally) });
         mark(knife);
         rounds += 1;
       }
@@ -3993,25 +3994,41 @@ async function botTryTrade(player) {
       if (!deal) break;
       const cutAlly = ashotCurrentAlly();
       const knife = cutAlly && deal.to.id === cutAlly.id && ashotAllyHooks >= 1;
-      await proposeAshotDeal(player, deal);
-      if (knife) ashotAnnounceBetrayal(cutAlly);
+      planned.push({ deal, after: knife ? () => ashotAnnounceBetrayal(cutAlly) : null });
       mark(deal);
       rounds += 1;
+    }
+
+    const deals = planned.map((item) => item.deal);
+    if (deals.length) {
+      deals.forEach((deal) => setLog(`${player.name} предлагает сделку ${deal.to.name}.`));
+      humanOfferTotal = deals.filter((deal) => !isBot(deal.to)).length;
+      humanOfferIndex = 0;
+      const keys = deals.map((deal) => pushTradeNotice(deal, 'pending'));
+      for (let index = 0; index < deals.length; index += 1) {
+        if (!isBot(deals[index].to)) humanOfferIndex += 1;
+        await resolveTrade(deals[index], keys[index]);
+        planned[index].after?.();
+      }
+      humanOfferTotal = 0;
+      humanOfferIndex = 0;
     }
     return;
   }
 
   if (isMiron(player) && mironWantsToTrade(player)) {
     const skipIds = [];
-    let rounds = 0;
-    while (rounds < 3) {
+    const planned = [];
+    while (planned.length < 3) {
       const next = buildMironTrade(player, skipIds);
       if (!next) break;
-      addComment(player, pickUnusedLine(MIRON_TRADE_OFFERS, usedMironTradeLines));
-      setLog(`${player.name} предлагает сделку ${next.to.name}.`);
-      await resolveTrade(next);
+      planned.push(next);
       next.giveCells.concat(next.getCells).forEach((cell) => skipIds.push(cell.id));
-      rounds += 1;
+    }
+    if (planned.length) {
+      addComment(player, pickUnusedLine(MIRON_TRADE_OFFERS, usedMironTradeLines));
+      planned.forEach((deal) => setLog(`${player.name} предлагает сделку ${deal.to.name}.`));
+      await resolveTradeBatch(planned);
     }
     return;
   }
@@ -4306,28 +4323,51 @@ function executeTrade(deal) {
   setLog(`${deal.from.name} и ${deal.to.name} меняются. ${formatDealSide(deal.from, deal.giveCells, deal.giveMoney, deal.giveCards, 'отдаёт')}; ${formatDealSide(deal.to, deal.getCells, deal.getMoney, deal.getCards, 'отдаёт')}.`);
 }
 
-async function showBotTradeDecision(deal, accepted) {
-  const verdict = accepted ? 'Принято' : 'Отклонено';
-  openModal(`
-    <div class="modal-card">
-      <div class="modal-card__kicker">Сделка ботов</div>
-      <h3 class="modal-card__title">${escapeHtml(deal.from.name)} → ${escapeHtml(deal.to.name)}</h3>
-      <div class="trade-review">
-        <div class="trade-review__side">${escapeHtml(formatDealSide(deal.from, deal.giveCells, deal.giveMoney, deal.giveCards, 'отдаёт'))}</div>
-        <div class="trade-review__side">${escapeHtml(formatDealSide(deal.to, deal.getCells, deal.getMoney, deal.getCards, 'отдаёт'))}</div>
-      </div>
-      <div class="trade-review__verdict${accepted ? ' trade-review__verdict--yes' : ' trade-review__verdict--no'}">${verdict}</div>
-    </div>
-  `, { dock: 'board' });
-  await sleep(accepted ? 2400 : 1800);
-  closeModal();
+let humanOfferIndex = 0;
+let humanOfferTotal = 0;
+
+function pushTradeNotice(deal, status, key) {
+  if (!tradeFeedEl) return key || '';
+  const id = key || `t-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  let item = tradeFeedEl.querySelector(`[data-trade-id="${id}"]`);
+  if (!item) {
+    item = document.createElement('article');
+    item.dataset.tradeId = id;
+    tradeFeedEl.prepend(item);
+  }
+  const verdict = status === 'pending' ? 'Ждёт решения' : status === 'yes' ? 'Принято' : 'Отклонено';
+  item.className = `trade-feed__item trade-feed__item--${status}`;
+  item.innerHTML = `
+    <div class="trade-feed__head">${escapeHtml(deal.from.name)} → ${escapeHtml(deal.to.name)}</div>
+    <div class="trade-feed__body">${escapeHtml(formatDealSide(deal.from, deal.giveCells, deal.giveMoney, deal.giveCards, 'отдаёт'))}<br>${escapeHtml(formatDealSide(deal.to, deal.getCells, deal.getMoney, deal.getCards, 'отдаёт'))}</div>
+    <div class="trade-feed__verdict">${verdict}</div>
+  `;
+  tradeFeedEl.hidden = false;
+  while (tradeFeedEl.children.length > 6) tradeFeedEl.lastElementChild.remove();
+  window.clearTimeout(item._fade);
+  if (status !== 'pending') {
+    item._fade = window.setTimeout(() => {
+      item.remove();
+      if (!tradeFeedEl.children.length) tradeFeedEl.hidden = true;
+    }, 16000);
+  }
+  return id;
+}
+
+async function showBotTradeDecision(deal, accepted, key) {
+  pushTradeNotice(deal, accepted ? 'yes' : 'no', key);
+  await sleep(accepted ? 1100 : 800);
 }
 
 async function confirmHumanTrade(deal) {
+  const queueNote = humanOfferTotal > 1
+    ? `<p class="modal-card__text">Предложение ${humanOfferIndex} из ${humanOfferTotal}</p>`
+    : '';
   openModal(`
     <div class="modal-card">
       <div class="modal-card__kicker">Предложение</div>
-      <h3 class="modal-card__title">${escapeHtml(deal.to.name)}, принять сделку?</h3>
+      <h3 class="modal-card__title">${escapeHtml(deal.from.name)} → ${escapeHtml(deal.to.name)}</h3>
+      ${queueNote}
       <div class="trade-review">
         <div class="trade-review__side">${escapeHtml(formatDealSide(deal.from, deal.giveCells, deal.giveMoney, deal.giveCards, 'отдаёт'))}</div>
         <div class="trade-review__side">${escapeHtml(formatDealSide(deal.to, deal.getCells, deal.getMoney, deal.getCards, 'отдаёт'))}</div>
@@ -4343,14 +4383,13 @@ async function confirmHumanTrade(deal) {
   return action === 'accept';
 }
 
-async function resolveTrade(deal) {
+async function resolveTrade(deal, noticeKey = null) {
+  const key = noticeKey || pushTradeNotice(deal, 'pending');
   if (isBot(deal.to)) {
     await botThink(deal.to, isLuckyFool(deal.to) ? 'Смотрю, блестит или нет.' : isMiron(deal.to) ? 'Считаю, не торгуюсь голосом.' : 'Считаю выгоду. Обычно её нет.');
     const accepted = botAcceptsTrade(deal.to, deal);
     addComment(deal.to, tradeThought(deal.to, deal, accepted));
-    if (isBot(deal.from)) {
-      await showBotTradeDecision(deal, accepted);
-    }
+    await showBotTradeDecision(deal, accepted, key);
     if (accepted) {
       executeTrade(deal);
     } else {
@@ -4359,13 +4398,31 @@ async function resolveTrade(deal) {
     return;
   }
 
+  if (!isBot(deal.from) || humanOfferTotal <= 1) {
+    humanOfferIndex = 1;
+    humanOfferTotal = Math.max(humanOfferTotal, 1);
+  }
   const accepted = await confirmHumanTrade(deal);
+  pushTradeNotice(deal, accepted ? 'yes' : 'no', key);
   if (accepted) {
     executeTrade(deal);
     await botsReact({ type: 'buy', actor: deal.from, cell: deal.getCells[0] || deal.giveCells[0] });
   } else {
     setLog(`${deal.to.name} отклоняет сделку с ${deal.from.name}.`);
   }
+}
+
+async function resolveTradeBatch(deals) {
+  const humans = deals.filter((deal) => !isBot(deal.to)).length;
+  humanOfferTotal = humans;
+  humanOfferIndex = 0;
+  const keys = deals.map((deal) => pushTradeNotice(deal, 'pending'));
+  for (let index = 0; index < deals.length; index += 1) {
+    if (!isBot(deals[index].to)) humanOfferIndex += 1;
+    await resolveTrade(deals[index], keys[index]);
+  }
+  humanOfferTotal = 0;
+  humanOfferIndex = 0;
 }
 
 async function showTradeModal(player) {
