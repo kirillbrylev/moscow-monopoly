@@ -142,6 +142,7 @@ function freshState(roster) {
     discards: { chance: [], chest: [] },
     consecutiveDoubles: 0,
     extraRoll: false,
+    extraRollPlayerId: null,
     lastDice: [0, 0],
     lastDiceTotal: 0,
     turnPhase: 'pre-roll',
@@ -205,6 +206,7 @@ function persistGame(message) {
         },
         consecutiveDoubles: state.consecutiveDoubles,
         extraRoll: state.extraRoll,
+        extraRollPlayerId: state.extraRollPlayerId,
         lastDice: state.lastDice,
         lastDiceTotal: state.lastDiceTotal,
         turnPhase: state.turnPhase,
@@ -252,6 +254,7 @@ function restoreFromSnapshot(snapshot) {
     },
     consecutiveDoubles: game.consecutiveDoubles || 0,
     extraRoll: Boolean(game.extraRoll),
+    extraRollPlayerId: Number.isInteger(game.extraRollPlayerId) ? game.extraRollPlayerId : null,
     lastDice: game.lastDice || [0, 0],
     lastDiceTotal: game.lastDiceTotal || 0,
     turnPhase: game.turnPhase || 'pre-roll',
@@ -279,6 +282,7 @@ function restoreFromSnapshot(snapshot) {
     state.decks.chest = shuffle(CHEST_CARDS);
     state.discards.chest = [];
   }
+  sanitizeExtraRoll();
 }
 
 async function resumeInterruptedLanding() {
@@ -293,7 +297,7 @@ async function resumeInterruptedLanding() {
   }
 
   const isDoubles = state.lastDice[0] === state.lastDice[1] && state.lastDice[0] > 0;
-  state.extraRoll = playerGetsExtraRoll(player, isDoubles);
+  grantExtraRoll(player, isDoubles);
   state.rolledOutOfJail = false;
   state.turnPhase = 'post-land';
   state.busy = false;
@@ -806,6 +810,11 @@ function updateBank() {
   if (bankHotelsEl) bankHotelsEl.textContent = String(state.bank.hotels);
 }
 
+function clearExtraRoll() {
+  state.extraRoll = false;
+  state.extraRollPlayerId = null;
+}
+
 function playerGetsExtraRoll(player, isDoubles) {
   return Boolean(
     isDoubles
@@ -817,20 +826,53 @@ function playerGetsExtraRoll(player, isDoubles) {
   );
 }
 
+function grantExtraRoll(player, isDoubles) {
+  if (!playerGetsExtraRoll(player, isDoubles)) {
+    clearExtraRoll();
+    return false;
+  }
+  state.extraRoll = true;
+  state.extraRollPlayerId = player.id;
+  return true;
+}
+
+function extraRollAllowed(player = getActivePlayer()) {
+  return Boolean(
+    state.extraRoll
+    && player
+    && !player.bankrupt
+    && state.extraRollPlayerId === player.id
+    && state.turnPhase !== 'pre-roll'
+    && state.winnerId == null
+  );
+}
+
+function sanitizeExtraRoll() {
+  const player = getActivePlayer();
+  if (!state.extraRoll || extraRollAllowed(player)) return false;
+  clearExtraRoll();
+  if (player && !player.bankrupt && state.turnPhase === 'post-land' && state.winnerId == null) {
+    state.turnPhase = 'pre-roll';
+  }
+  return true;
+}
+
 function finishTurnIfBankrupt(player) {
   if (!player?.bankrupt || state.winnerId != null) return false;
-  state.extraRoll = false;
+  clearExtraRoll();
   state.turnPhase = 'post-land';
-  endTurn();
+  endTurn({ force: true });
   return true;
 }
 
 function updateActionButtons() {
+  sanitizeExtraRoll();
   const gameOver = state.winnerId != null;
   const player = getActivePlayer();
+  const extra = extraRollAllowed(player);
   const humanTurn = !isBot(player) && !player.bankrupt;
-  const canRoll = !gameOver && !state.busy && humanTurn && (state.turnPhase === 'pre-roll' || state.extraRoll) && !player.inJail;
-  const canEnd = !gameOver && !state.busy && humanTurn && state.turnPhase === 'post-land' && !state.extraRoll;
+  const canRoll = !gameOver && !state.busy && humanTurn && (state.turnPhase === 'pre-roll' || extra) && !player.inJail;
+  const canEnd = !gameOver && !state.busy && humanTurn && state.turnPhase === 'post-land' && !extra;
 
   rollBtn.disabled = !canRoll;
   manageBtn.disabled = gameOver || state.busy || !humanTurn;
@@ -839,7 +881,7 @@ function updateActionButtons() {
   if (!humanTurn && !gameOver) {
     rollBtnLabel.textContent = `${player.name} ходит…`;
   } else {
-    rollBtnLabel.textContent = state.extraRoll ? 'Бросить ещё раз' : 'Бросить кубики';
+    rollBtnLabel.textContent = extra ? 'Бросить ещё раз' : 'Бросить кубики';
   }
 }
 
@@ -2942,13 +2984,14 @@ async function handleBotJailTurn(player) {
 function botShouldFinishTurn(player) {
   if (!player || player.bankrupt) return true;
   if (player.inJail && state.turnPhase !== 'pre-roll') return true;
-  return state.turnPhase === 'post-land' && !state.extraRoll;
+  return state.turnPhase === 'post-land' && !extraRollAllowed(player);
 }
 
 function resumeBotOrLanding() {
   if (state.winnerId != null) return;
+  sanitizeExtraRoll();
   if (getActivePlayer()?.bankrupt) {
-    endTurn();
+    endTurn({ force: true });
     return;
   }
   if (state.turnPhase === 'resolve-land') {
@@ -2988,7 +3031,7 @@ async function runBotTurn() {
         botTurnAlive(gen, player)
         && isBot(player)
         && !player.inJail
-        && (state.turnPhase === 'pre-roll' || state.extraRoll)
+        && (state.turnPhase === 'pre-roll' || extraRollAllowed(player))
       ) {
         await botThink(player, isLuckyFool(player)
           ? 'Сейчас кину. Секунду.'
@@ -3355,7 +3398,7 @@ async function declareBankruptcy(player, creditor) {
   }
 
   player.bankrupt = true;
-  state.extraRoll = false;
+  clearExtraRoll();
   const remaining = state.players.filter((item) => !item.bankrupt);
   if (remaining.length > 1) {
     setLog(`${player.name} банкрот и выбывает. Игра продолжается.`);
@@ -3366,7 +3409,7 @@ async function declareBankruptcy(player, creditor) {
   const winner = remaining[0];
   state.winnerId = winner.id;
   state.turnPhase = 'game-over';
-  state.extraRoll = false;
+  clearExtraRoll();
   setLog(`${player.name} банкрот. Побеждает ${winner.name}!`);
   refreshUI();
 
@@ -4837,7 +4880,7 @@ async function sendToJail(player) {
   player.inJail = true;
   player.jailTurns = 0;
   state.consecutiveDoubles = 0;
-  state.extraRoll = false;
+  clearExtraRoll();
   state.rolledOutOfJail = false;
   setLog(`${player.name} отправляется в тюрьму. Зарплату за «Вперёд» не получает.`);
   refreshUI();
@@ -5116,14 +5159,14 @@ async function runJailTurn() {
 
   if (result === 'stay' || player.inJail) {
     state.turnPhase = 'post-land';
-    state.extraRoll = false;
+    clearExtraRoll();
     refreshUI();
     persistGame();
     return;
   }
 
   state.turnPhase = 'post-land';
-  state.extraRoll = false;
+  clearExtraRoll();
   refreshUI();
   persistGame();
 }
@@ -5131,12 +5174,12 @@ async function runJailTurn() {
 async function startTurn() {
   const player = getActivePlayer();
   if (player.bankrupt) {
-    endTurn();
+    endTurn({ force: true });
     return;
   }
 
   state.consecutiveDoubles = 0;
-  state.extraRoll = false;
+  clearExtraRoll();
   state.rolledOutOfJail = false;
   state.turnPhase = 'pre-roll';
   resetHouseBuyCredit();
@@ -5158,8 +5201,11 @@ async function startTurn() {
   }
 }
 
-function endTurn() {
-  if (state.busy || state.winnerId != null) return;
+function endTurn(options = {}) {
+  if (state.winnerId != null) return;
+  if (state.busy && !options.force && !getActivePlayer()?.bankrupt) return;
+  state.busy = false;
+  clearExtraRoll();
   do {
     state.activePlayerIndex = (state.activePlayerIndex + 1) % state.players.length;
   } while (getActivePlayer().bankrupt && state.winnerId == null);
@@ -5171,7 +5217,7 @@ async function handleRoll() {
   if (state.busy || state.winnerId != null) return;
   const player = getActivePlayer();
   if (player.bankrupt || player.inJail) return;
-  if (state.turnPhase === 'post-land' && !state.extraRoll) return;
+  if (state.turnPhase === 'post-land' && !extraRollAllowed(player)) return;
 
   state.busy = true;
   updateActionButtons();
@@ -5192,7 +5238,7 @@ async function handleRoll() {
     addComment(player, isUnluckySmart(player) ? 'Третий дубль. Ну конечно, в тюрьму.' : diceThought(player, dice, total));
     await sendToJail(player);
     state.turnPhase = 'post-land';
-    state.extraRoll = false;
+    clearExtraRoll();
     state.busy = false;
     refreshUI();
     persistGame();
@@ -5208,7 +5254,7 @@ async function handleRoll() {
   persistGame();
   await resolveLanding(player);
 
-  state.extraRoll = playerGetsExtraRoll(player, isDoubles);
+  grantExtraRoll(player, isDoubles);
   state.rolledOutOfJail = false;
   state.turnPhase = 'post-land';
   state.busy = false;
@@ -5219,7 +5265,7 @@ async function handleRoll() {
     return;
   }
   if (finishTurnIfBankrupt(player)) return;
-  if (state.extraRoll) {
+  if (extraRollAllowed(player)) {
     setLog(`${player.name} выбил дубль и ходит ещё раз. Можно строить дома или бросать.`);
   } else {
     setLog(`${player.name} может строить дома, торговаться, закладывать участки или закончить ход.`);
