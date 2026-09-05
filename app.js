@@ -63,6 +63,7 @@ let ashotTurnNote = null;
 let ashotAllyId = null;
 let ashotAllyHooks = 0;
 let ashotBetrayedIds = [];
+let houseBuyCredit = {};
 let botTurnBad = false;
 let lokhTurnAfraid = false;
 let usedLokhLines = [];
@@ -186,6 +187,7 @@ function persistGame(message) {
       ashotAllyId,
       ashotAllyHooks,
       ashotBetrayedIds: ashotBetrayedIds.slice(),
+      houseBuyCredit: { ...houseBuyCredit },
       lastDice: state.lastDice,
       lastDiceTotal: state.lastDiceTotal,
       game: {
@@ -264,6 +266,9 @@ function restoreFromSnapshot(snapshot) {
   ashotAllyId = Number.isInteger(snapshot.ashotAllyId) ? snapshot.ashotAllyId : null;
   ashotAllyHooks = Number(snapshot.ashotAllyHooks) || 0;
   ashotBetrayedIds = Array.isArray(snapshot.ashotBetrayedIds) ? snapshot.ashotBetrayedIds.slice() : [];
+  houseBuyCredit = snapshot.houseBuyCredit && typeof snapshot.houseBuyCredit === 'object'
+    ? { ...snapshot.houseBuyCredit }
+    : {};
   ensureMironInRoster(snapshot);
 
   if (state.decks.chance.length + state.discards.chance.length < 8) {
@@ -394,6 +399,7 @@ function beginMatch(roster) {
   ashotAllyId = null;
   ashotAllyHooks = 0;
   ashotBetrayedIds = [];
+  houseBuyCredit = {};
   usedLokhLines = [];
   botTurnBad = false;
   lokhTurnAfraid = false;
@@ -3087,6 +3093,34 @@ function liquidValue(player) {
   return total;
 }
 
+function resetHouseBuyCredit() {
+  houseBuyCredit = {};
+}
+
+function houseCreditCount(cellId) {
+  return Math.max(0, Number(houseBuyCredit[cellId]) || 0);
+}
+
+function addHouseCredit(cellId, delta) {
+  const next = houseCreditCount(cellId) + delta;
+  if (next > 0) houseBuyCredit[cellId] = next;
+  else delete houseBuyCredit[cellId];
+}
+
+function houseRefundAmount(cell, title, useCredit) {
+  const cost = getHouseCost(cell);
+  const credit = useCredit ? houseCreditCount(cell.id) : 0;
+  if (title.houses === 5 && state.bank.houses < 4) {
+    const full = Math.min(credit, 5);
+    return {
+      refund: full * cost + (5 - full) * Math.floor(cost / 2),
+      creditUsed: full,
+    };
+  }
+  if (credit > 0) return { refund: cost, creditUsed: 1 };
+  return { refund: Math.floor(cost / 2), creditUsed: 0 };
+}
+
 function houseActionState(player, cell) {
   const title = state.titles[cell.id];
   const cost = getHouseCost(cell);
@@ -3126,7 +3160,8 @@ function houseActionState(player, cell) {
   }
 
   let canSell = title.houses > 0 && title.houses >= maxHouses;
-  let sellTitle = `Продать · ₽ ${Math.floor(cost / 2)}`;
+  const previewRefund = houseRefundAmount(cell, title, true).refund;
+  let sellTitle = `Вернуть · ₽ ${previewRefund}`;
 
   if (title.houses <= 0) {
     canSell = false;
@@ -3136,13 +3171,13 @@ function houseActionState(player, cell) {
     sellTitle = 'Продавайте равномерно';
   } else if (title.houses === 5 && state.bank.houses < 4) {
     canSell = true;
-    sellTitle = `Продать отель целиком · ₽ ${Math.floor((cost * 5) / 2)}`;
+    sellTitle = `Продать отель целиком · ₽ ${previewRefund}`;
   }
 
   return { canBuy, canSell, buyTitle, sellTitle, cost };
 }
 
-function buyHouse(player, cellId) {
+function buyHouse(player, cellId, options = {}) {
   const cell = BOARD[cellId];
   const { canBuy, cost } = houseActionState(player, cell);
   if (!canBuy) return;
@@ -3158,33 +3193,36 @@ function buyHouse(player, cellId) {
     title.houses += 1;
     setLog(`${player.name} строит дом на «${cell.name}».`);
   }
+  if (options.credit) addHouseCredit(cellId, 1);
 }
 
-function sellHouse(player, cellId) {
+function sellHouse(player, cellId, options = {}) {
   const cell = BOARD[cellId];
   const title = state.titles[cellId];
-  const { canSell, cost } = houseActionState(player, cell);
+  const { canSell } = houseActionState(player, cell);
   if (!canSell) return;
+  const { refund, creditUsed } = houseRefundAmount(cell, title, Boolean(options.credit));
 
   if (title.houses === 5) {
     if (state.bank.houses >= 4) {
       state.bank.hotels += 1;
       state.bank.houses -= 4;
       title.houses = 4;
-      addMoney(player, Math.floor(cost / 2));
     } else {
       state.bank.hotels += 1;
       title.houses = 0;
-      addMoney(player, Math.floor((cost * 5) / 2));
     }
-    setLog(`${player.name} продаёт отель на «${cell.name}».`);
+    addMoney(player, refund);
+    addHouseCredit(cellId, -creditUsed);
+    setLog(`${player.name} продаёт отель на «${cell.name}» и получает ₽ ${formatMoney(refund)}.`);
     return;
   }
 
   state.bank.houses += 1;
   title.houses -= 1;
-  addMoney(player, Math.floor(cost / 2));
-  setLog(`${player.name} продаёт дом на «${cell.name}».`);
+  addMoney(player, refund);
+  addHouseCredit(cellId, -creditUsed);
+  setLog(`${player.name} снимает дом с «${cell.name}» и получает ₽ ${formatMoney(refund)}.`);
 }
 
 function mortgageProperty(player, cellId) {
@@ -3456,7 +3494,7 @@ function renderManageModal(player, debtAmount) {
       <h3 class="modal-card__title">${player.name} · ₽ ${formatMoney(player.money)}</h3>
       ${debtAmount
         ? `<div class="modal-card__banner modal-card__banner--danger">Нужно набрать ₽ ${formatMoney(debtAmount)}. Продайте дома или заложите участки.</div>`
-        : '<p class="modal-card__text">Строить дома можно только на полной цветовой группе, равномерно. 4 дома → отель. Меняться улицами — кнопка «Торговля».</p>'}
+        : '<p class="modal-card__text">Строить дома можно только на полной цветовой группе, равномерно. 4 дома → отель. Дом, купленный в этом ходу, снимается за полную цену.</p>'}
       <div class="manage-list">
         ${sections.length ? sections.join('') : '<p class="modal-card__text">Пока нет купленных участков.</p>'}
       </div>
@@ -3472,11 +3510,12 @@ async function showManageModal(player, options = {}) {
     renderManageModal(player, options.debtAmount);
     const { action, cellId } = await waitModalAction();
     if (action === 'close') break;
-    if (action === 'buy-house') buyHouse(player, cellId);
-    if (action === 'sell-house') sellHouse(player, cellId);
+    if (action === 'buy-house') buyHouse(player, cellId, { credit: true });
+    if (action === 'sell-house') sellHouse(player, cellId, { credit: true });
     if (action === 'mortgage') mortgageProperty(player, cellId);
     if (action === 'unmortgage') unmortgageProperty(player, cellId);
     refreshUI();
+    persistGame();
   }
   closeModal();
 }
@@ -4125,6 +4164,7 @@ function pickMironOfferStreet(miron, partner, want) {
       const size = getGroupCells(cell.group).length;
       if (countOwnedInGroup(miron.id, cell.group) === size - 1) return false;
     }
+    if (want.group && cell.group === want.group && !completesSet(miron, want)) return false;
     if (completesSet(partner, cell)) {
       const giveEdge = cell.group ? mironGroupEdge(cell.group) : 20;
       const getEdge = want.group ? mironGroupEdge(want.group) : 20;
@@ -4171,12 +4211,44 @@ function mironWantsToTrade(player) {
   ));
 }
 
+function mironCountAfter(player, receives, gives, group) {
+  let count = countOwnedInGroup(player.id, group);
+  gives.forEach((cell) => {
+    if (cell.group === group) count -= 1;
+  });
+  receives.forEach((cell) => {
+    if (cell.group === group) count += 1;
+  });
+  return count;
+}
+
+function mironPositionImproves(miron, receives, gives) {
+  if (receives.some((cell) => completesSet(miron, cell))) return true;
+  if (receives.some((cell) => opponentWouldComplete(cell, miron.id))) return true;
+  let bestGain = 0;
+  let bestLoss = 0;
+  const groups = new Set(receives.concat(gives).map((cell) => cell.group).filter(Boolean));
+  groups.forEach((group) => {
+    const before = countOwnedInGroup(miron.id, group);
+    const after = mironCountAfter(miron, receives, gives, group);
+    const delta = after - before;
+    if (delta > 0) bestGain = Math.max(bestGain, mironGroupEdge(group) * delta);
+    if (delta < 0) bestLoss = Math.max(bestLoss, mironGroupEdge(group) * -delta);
+  });
+  if (bestGain > 0 && bestGain >= bestLoss) return true;
+  const railGain = receives.filter((cell) => cell.type === 'railroad').length
+    - gives.filter((cell) => cell.type === 'railroad').length;
+  return railGain > 0;
+}
+
 function makeMironBuyDeal(miron, partner, want, offer) {
+  if (offer?.group && want.group === offer.group && !completesSet(miron, want)) return null;
   const gap = Math.max(0, (want.price || 0) - (offer?.price || 0));
   const edge = want.group ? mironGroupEdge(want.group) : 40;
   let giveMoney = Math.floor(gap * (isLuckyFool(partner) ? 0.38 : isUnluckySmart(partner) ? 1.08 : 0.92));
-  if (edge >= 90) giveMoney = Math.max(giveMoney, Math.floor((want.price || 80) * 0.95));
+  if (!offer && edge >= 90) giveMoney = Math.max(giveMoney, Math.floor((want.price || 80) * 0.95));
   if (!offer) giveMoney = Math.max(giveMoney, Math.floor((want.price || 80) * (isBot(partner) ? 0.92 : 0.78)));
+  if (offer) giveMoney = Math.min(giveMoney, Math.max(gap, Math.floor((want.price || 80) * 0.28)));
   const keep = edge >= 90 ? 35 : 70;
   giveMoney = Math.max(0, Math.min(miron.money - keep, giveMoney));
   if (!offer && giveMoney < (want.price || 80) * 0.4) return null;
@@ -4191,6 +4263,7 @@ function makeMironBuyDeal(miron, partner, want, offer) {
     getCards: 0,
   };
   if (!dealHasContent(deal) || validateTrade(deal)) return null;
+  if (!mironPositionImproves(miron, deal.getCells, deal.giveCells)) return null;
   return deal;
 }
 
@@ -4297,6 +4370,7 @@ function botAcceptsTrade(bot, deal) {
     if (givesAlmostSet(bot, deal) && !score.completes) return false;
     if (completesOpponentSet(deal) && !score.completes) return false;
     if (completesOpponentSet(deal) && score.completes && getEdge <= giveEdge + 10) return false;
+    if (!score.completes && !mironPositionImproves(bot, mine, theirs)) return false;
     if (score.cashAfter < 40) return false;
     if (score.completes && getEdge >= 78) return score.net >= -130 && score.cashAfter >= 35;
     if (score.completes) return score.net >= -35 && score.cashAfter >= 55;
@@ -5040,6 +5114,7 @@ async function startTurn() {
   state.extraRoll = false;
   state.rolledOutOfJail = false;
   state.turnPhase = 'pre-roll';
+  resetHouseBuyCredit();
   refreshUI();
   setLog(`Ход ${player.name}. Можно купить дома или бросать кубики.`);
   persistGame();
