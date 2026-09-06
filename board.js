@@ -337,8 +337,8 @@ export const PLAYER_CATALOG = [
     token: '🚗',
     color: '#E53935',
     isBot: false,
-    defaultOn: true,
-    blurb: 'человек · можно снять',
+    defaultOn: false,
+    blurb: 'человек · можно добавить',
   },
   {
     key: 'human2',
@@ -346,8 +346,8 @@ export const PLAYER_CATALOG = [
     token: '🎩',
     color: '#1E88E5',
     isBot: false,
-    defaultOn: true,
-    blurb: 'человек · можно одному, без Кирилла',
+    defaultOn: false,
+    blurb: 'человек · можно добавить',
   },
   {
     key: 'mart',

@@ -408,7 +408,7 @@ function beginMatch(roster) {
   usedLokhLines = [];
   botTurnBad = false;
   lokhTurnAfraid = false;
-  clearLog(`${tableWelcome(seats.map((player) => player.name))} Первым ходит ${seats[0].name}.`);
+  clearLog(`${tableWelcome(seats.map((player) => player.name), seats)} Первым ходит ${seats[0].name}.`);
   skipNextHumanComment = false;
   chatSpeakerId = humanPlayers()[0]?.id ?? 0;
   refreshUI();
@@ -424,12 +424,8 @@ function showLobbyError(message) {
 
 function handleStartGame() {
   const roster = collectLobbyRoster();
-  if (!roster.some((player) => !player.isBot)) {
-    showLobbyError('Нужен хотя бы один человек: Кирилл или Артём.');
-    return;
-  }
   if (roster.length < 2) {
-    showLobbyError('Нужно хотя бы двое игроков. Добавьте бота или второго человека.');
+    showLobbyError('Нужно хотя бы двое. Можно только ботов — тогда вы смотрите игру.');
     return;
   }
   try {
@@ -879,7 +875,8 @@ function updateActionButtons() {
   if (tradeBtn) tradeBtn.disabled = gameOver || state.busy || !humanTurn;
   endTurnBtn.hidden = !canEnd;
   if (!humanTurn && !gameOver) {
-    rollBtnLabel.textContent = `${player.name} ходит…`;
+    const watching = matchActive && !state.players.some((item) => !isBot(item));
+    rollBtnLabel.textContent = watching ? `Смотрите · ${player.name} ходит` : `${player.name} ходит…`;
   } else {
     rollBtnLabel.textContent = extra ? 'Бросить ещё раз' : 'Бросить кубики';
   }
@@ -1605,8 +1602,11 @@ function migrateHumanNames(players) {
   });
 }
 
-function tableWelcome(names) {
-  return `За столом ${formatNameList(names)}. Март, Лох, Мирон и Ашот ходят сами.`;
+function tableWelcome(names, roster = []) {
+  if (roster.length && roster.every((player) => player.isBot)) {
+    return `За столом ${formatNameList(names)}. Вы смотрите: боты играют сами.`;
+  }
+  return `За столом ${formatNameList(names)}. Боты ходят сами.`;
 }
 
 function isMiron(player) {

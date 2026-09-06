@@ -104,23 +104,23 @@
     <div class="lobby" role="dialog" aria-modal="true" aria-labelledby="lobby-title">
       <p class="lobby__kicker">Монополия · Москва</p>
       <h2 class="lobby__title" id="lobby-title">Кто за столом?</h2>
-      <p class="lobby__lead">Отметьте, с кем играть. Нужны минимум двое и хотя бы один человек. Можно одному за Кирилла или за Артёма — второго человека снимите.</p>
+      <p class="lobby__lead">Отметьте, кто за столом. Нужны минимум двое. Кирилла и Артёма можно не брать — тогда вы просто смотрите, как играют боты.</p>
       <div class="lobby__seats" id="lobby-seats">
         <label class="lobby-seat">
           <span class="lobby-seat__token" style="--seat-color:#E53935">🚗</span>
           <span class="lobby-seat__body">
             <span class="lobby-seat__name">Кирилл</span>
-            <span class="lobby-seat__blurb">человек · можно снять</span>
+            <span class="lobby-seat__blurb">человек · можно добавить</span>
           </span>
-          <input type="checkbox" data-seat-key="human1" checked>
+          <input type="checkbox" data-seat-key="human1">
         </label>
         <label class="lobby-seat">
           <span class="lobby-seat__token" style="--seat-color:#1E88E5">🎩</span>
           <span class="lobby-seat__body">
             <span class="lobby-seat__name">Артём</span>
-            <span class="lobby-seat__blurb">человек · можно одному, без Кирилла</span>
+            <span class="lobby-seat__blurb">человек · можно добавить</span>
           </span>
-          <input type="checkbox" data-seat-key="human2" checked>
+          <input type="checkbox" data-seat-key="human2">
         </label>
         <label class="lobby-seat">
           <span class="lobby-seat__token" style="--seat-color:#8E24AA">🐈‍⬛</span>
@@ -163,6 +163,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=bankrupt-doubles-2"></script>
+  <script type="module" src="app.js?v=watch-bots"></script>
 </body>
 </html>
