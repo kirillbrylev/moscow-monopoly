@@ -367,6 +367,7 @@ function collectLobbyRoster() {
     isBot: Boolean(seat.isBot),
     botId: seat.botId,
     botKind: seat.botKind,
+    key: seat.key,
   }));
 }
 
@@ -1414,6 +1415,18 @@ const MAMA_SOUND_FILES = {
   'not-related': 'sounds/mama/not-related.mp3',
 };
 
+const MAMA_CLIP_LINES = {
+  lucky: 'Два миллиона на счёт и я счастлива.',
+  quiet: 'Тихо! Кирюша спит!',
+  mart: 'Говносрала надо выбросить.',
+  'artem-bed': 'Артём, быстро в кровать!',
+  'not-funny': 'Это не смешно.',
+  'stop-poop': 'Заканчивай тему про говно.',
+  'not-related': 'Причём тут это? Не связано! В чём смысл?',
+};
+
+const MAMA_MAD_CLIPS = ['not-funny', 'not-related'];
+
 const mamaSoundPlayers = {};
 let mamaSoundTimer = 0;
 
@@ -1444,77 +1457,56 @@ function playMamaClip(name) {
   if (started?.catch) started.catch(() => {});
 }
 
+function mamaSay(name) {
+  const mama = mamaSeated();
+  if (!mama || !MAMA_SOUND_FILES[name]) return;
+  playMamaClip(name);
+  pushComment(mama, MAMA_CLIP_LINES[name], { echoLog: false });
+}
+
 function mamaSeated() {
   return state.players.find((player) => isMama(player) && !player.bankrupt) || null;
 }
 
 function isArtem(player) {
-  return player?.name === 'Артём' || player?.botId === 'human2';
+  return player?.name === 'Артём' || player?.botId === 'human2' || player?.key === 'human2';
 }
 
-const MAMA_MAD_LINES = [
-  'Это не смешно.',
-  'Причём тут это? Не связано! В чём смысл?',
-  'Да что ж такое, всем везёт, мне нет!',
-  'Не нервируйте маму. Уже на нервах.',
-  'Вы все меня бесите этим полем.',
-  'Опять мимо. Кому сказать?',
-  'Ну кто так ходит, а?',
-  'Деньги уходят, а вы молчите.',
-];
-
-function pickMamaMadLine() {
-  const left = MAMA_MAD_LINES.filter((line) => !usedMamaLines.includes(line));
-  const pool = left.length ? left : MAMA_MAD_LINES;
-  const line = pool[Math.floor(Math.random() * pool.length)];
-  usedMamaLines.push(line);
-  if (usedMamaLines.length > MAMA_MAD_LINES.length) usedMamaLines = [];
-  return line;
+function pickMamaMadClip() {
+  const left = MAMA_MAD_CLIPS.filter((name) => !usedMamaLines.includes(name));
+  const pool = left.length ? left : MAMA_MAD_CLIPS;
+  const name = pool[Math.floor(Math.random() * pool.length)];
+  usedMamaLines.push(name);
+  if (usedMamaLines.length >= MAMA_MAD_CLIPS.length) usedMamaLines = [];
+  return name;
 }
 
 function mamaHearMart(kind) {
-  const mama = mamaSeated();
-  if (!mama) return;
-  if (kind === 'gross') {
-    playMamaClip('stop-poop');
-    pushComment(mama, 'Заканчивай тему про говно.', { echoLog: false });
-    return;
-  }
-  playMamaClip('mart');
-  pushComment(mama, 'Говносрала надо выбросить.', { echoLog: false });
+  if (!mamaSeated()) return;
+  mamaSay(kind === 'gross' ? 'stop-poop' : 'mart');
 }
 
 function mamaWatchRoll(player, dice, total) {
   const mama = mamaSeated();
   if (!mama || !player || player.id === mama.id) return;
-  const lucky = dice[0] === dice[1] || total >= 10;
-  if (lucky) {
-    playMamaClip('quiet');
-    pushComment(mama, 'Тихо! Кирюша спит!', { echoLog: false });
-    return;
-  }
   if (isArtem(player)) {
     mamaArtemOdd = !mamaArtemOdd;
     if (mamaArtemOdd) {
-      playMamaClip('artem-bed');
-      pushComment(mama, 'Артём, быстро в кровать!', { echoLog: false });
+      mamaSay('artem-bed');
+      return;
     }
   }
+  if (dice[0] === dice[1] || total >= 10) mamaSay('quiet');
 }
 
 function finishMamaTurn(player) {
   if (!isMama(player)) return;
   const bad = mamaTurnBad || botTurnBad || player.bankrupt;
   if (bad) {
-    const line = pickMamaMadLine();
-    pushComment(player, line, { echoLog: false });
-    playMamaClip(Math.random() < 0.5 ? 'not-funny' : 'not-related');
+    mamaSay(pickMamaMadClip());
     return;
   }
-  if (mamaTurnLucky) {
-    playMamaClip('lucky');
-    pushComment(player, 'Два миллиона на счёт и я счастлива.', { echoLog: false });
-  }
+  if (mamaTurnLucky) mamaSay('lucky');
 }
 
 function pickRussianVoice() {
@@ -1563,10 +1555,58 @@ const ASHOT_SHORT_LINES = [
   'Виноград как утро',
 ];
 
+const ASHOT_SOUND_FILES = {
+  'Бери персики, браток': 'sounds/ashot/peach.mp3',
+  'Помидоры свежие, бери': 'sounds/ashot/tomatoes.mp3',
+  'Для своих дороже': 'sounds/ashot/own-dear.mp3',
+  'Давай меняться': 'sounds/ashot/trade.mp3',
+  'Не с клетки': 'sounds/ashot/no-cell.mp3',
+  'Скидка если две': 'sounds/ashot/discount.mp3',
+  'Последняя, честно': 'sounds/ashot/last.mp3',
+  'Арбуз сладкий': 'sounds/ashot/melon.mp3',
+  'Улицу продам': 'sounds/ashot/street.mp3',
+  'Цена для своих': 'sounds/ashot/own-price.mp3',
+  'Гранат спелый': 'sounds/ashot/pomegranate.mp3',
+  'Бери, не стой': 'sounds/ashot/take.mp3',
+  'Виноград как утро': 'sounds/ashot/grapes.mp3',
+};
+
+const ashotSoundPlayers = {};
+
+function getAshotSound(line) {
+  const file = ASHOT_SOUND_FILES[line];
+  if (!file) return null;
+  if (!ashotSoundPlayers[line]) {
+    const audio = new Audio(file);
+    audio.preload = 'auto';
+    ashotSoundPlayers[line] = audio;
+  }
+  return ashotSoundPlayers[line];
+}
+
+function preloadAshotSounds() {
+  Object.keys(ASHOT_SOUND_FILES).forEach((line) => getAshotSound(line));
+}
+
+function playAshotClip(line) {
+  const audio = getAshotSound(line);
+  if (!audio) return false;
+  Object.values(ashotSoundPlayers).forEach((item) => {
+    item.pause();
+    item.currentTime = 0;
+  });
+  audio.volume = 0.92;
+  const started = audio.play();
+  if (started?.catch) started.catch(() => {});
+  return true;
+}
+
 function speakAshot(text) {
-  const synth = window.speechSynthesis;
-  if (!synth || !text) return;
+  if (!text) return;
   ashotSpokeThisTurn = true;
+  if (playAshotClip(text)) return;
+  const synth = window.speechSynthesis;
+  if (!synth) return;
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'ru-RU';
   utter.rate = 0.86;
@@ -2071,7 +2111,10 @@ async function replyToChat(speaker, text, gen) {
     await botSleep(isLuckyFool(bot) ? 420 : 280);
     if (gameGen !== gen || !matchActive) return;
     const line = chatReplyLine(bot, speaker, text);
-    if (line) pushComment(bot, line, { echoLog: false, flavor: false });
+    if (line) {
+      pushComment(bot, line, { echoLog: false, flavor: false });
+      if (isAshot(bot)) speakAshot(line);
+    }
   }
   persistGame();
 }
@@ -5021,6 +5064,7 @@ async function offerPurchase(player, cell) {
     if (want) {
       takeMoney(player, cell.price);
       state.titles[cell.id].ownerId = player.id;
+      if (isMama(player) && (isExpensiveStreet(cell) || completesSet(player, cell))) mamaTurnLucky = true;
       setLog(`${player.name} покупает «${cell.name}» за ₽ ${formatMoney(cell.price)}.`);
       refreshUI();
       return;
@@ -5157,6 +5201,7 @@ async function runAuction(cell) {
     const winner = state.players.find((player) => player.id === leaderId);
     takeMoney(winner, currentBid);
     state.titles[cell.id].ownerId = winner.id;
+    if (isMama(winner) && (isExpensiveStreet(cell) || completesSet(winner, cell))) mamaTurnLucky = true;
     setLog(`${winner.name} берёт «${cell.name}» с аукциона за ₽ ${formatMoney(currentBid)}.`);
   } else {
     setLog(`«${cell.name}» остаётся у банка.`);
@@ -5169,6 +5214,7 @@ async function movePlayer(player, steps) {
     player.position = (player.position + 1) % BOARD.length;
     if (player.position === 0) {
       addMoney(player, GO_SALARY);
+      if (isMama(player)) mamaTurnLucky = true;
       setLog(`${player.name} проходит «Вперёд» и получает ₽ ${GO_SALARY}`);
     }
     renderTokens(player.id);
@@ -5183,6 +5229,7 @@ async function movePlayerTo(player, destination, { collectGo = true } = {}) {
     player.position = (player.position + 1) % BOARD.length;
     if (player.position === 0 && collectGo) {
       addMoney(player, GO_SALARY);
+      if (isMama(player)) mamaTurnLucky = true;
       setLog(`${player.name} проходит «Вперёд» и получает ₽ ${GO_SALARY}`);
     }
     renderTokens(player.id);
@@ -5199,6 +5246,7 @@ async function movePlayerSteps(player, steps) {
       player.position = (player.position + 1) % BOARD.length;
       if (player.position === 0) {
         addMoney(player, GO_SALARY);
+        if (isMama(player)) mamaTurnLucky = true;
         setLog(`${player.name} проходит «Вперёд» и получает ₽ ${GO_SALARY}`);
       }
     } else {
@@ -5656,6 +5704,7 @@ function init() {
     unlockSpeech();
     preloadMartSounds();
     preloadMamaSounds();
+    preloadAshotSounds();
   }, { once: true });
   window.speechSynthesis?.addEventListener?.('voiceschanged', () => pickRussianVoice());
   window.addEventListener('resize', () => renderTokens());
