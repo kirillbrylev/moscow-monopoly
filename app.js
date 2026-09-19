@@ -67,6 +67,10 @@ let houseBuyCredit = {};
 let botTurnBad = false;
 let lokhTurnAfraid = false;
 let usedLokhLines = [];
+let usedMamaLines = [];
+let mamaTurnBad = false;
+let mamaTurnLucky = false;
+let mamaArtemOdd = false;
 const COMMENT_LIMIT = 40;
 const BOT_PACE = 2;
 const recentHumanReactions = [];
@@ -406,8 +410,12 @@ function beginMatch(roster) {
   ashotBetrayedIds = [];
   houseBuyCredit = {};
   usedLokhLines = [];
+  usedMamaLines = [];
   botTurnBad = false;
   lokhTurnAfraid = false;
+  mamaTurnBad = false;
+  mamaTurnLucky = false;
+  mamaArtemOdd = false;
   clearLog(`${tableWelcome(seats.map((player) => player.name), seats)} Первым ходит ${seats[0].name}.`);
   skipNextHumanComment = false;
   chatSpeakerId = humanPlayers()[0]?.id ?? 0;
@@ -635,6 +643,7 @@ function renderPlayerCards() {
     card.className = 'player-card';
     if (isMiron(player)) card.classList.add('player-card--miron');
     else if (isAshot(player)) card.classList.add('player-card--ashot');
+    else if (isMama(player)) card.classList.add('player-card--mama');
     else if (player.isBot) card.classList.add('player-card--bot');
     if (player.botKind === 'lokh') card.classList.add('player-card--lokh');
     if (index === state.activePlayerIndex) card.classList.add('player-card--active');
@@ -656,13 +665,15 @@ function renderPlayerCards() {
       ? 'Сова · чемпион'
       : isAshot(player)
         ? 'Фрукты из Сочи'
-        : isUnluckySmart(player)
-          ? 'Утка · умный трус'
-          : isLuckyFool(player)
-            ? 'Кот · везучий дурак'
-            : player.isBot
-              ? 'Бот'
-              : 'Человек';
+        : isMama(player)
+          ? 'Мама · копит'
+          : isUnluckySmart(player)
+            ? 'Утка · умный трус'
+            : isLuckyFool(player)
+              ? 'Кот · везучий дурак'
+              : player.isBot
+                ? 'Бот'
+                : 'Человек';
 
     const flags = [];
     if (player.inJail) flags.push('<span class="player-card__flag player-card__flag--jail">В тюрьме</span>');
@@ -1151,7 +1162,7 @@ function clearLog(message) {
 }
 
 function talksInCharacter(player) {
-  return player?.botKind === 'mart' || player?.botKind === 'lokh' || isMiron(player) || isAshot(player);
+  return player?.botKind === 'mart' || player?.botKind === 'lokh' || isMiron(player) || isAshot(player) || isMama(player);
 }
 
 function renderCommentary() {
@@ -1186,7 +1197,7 @@ function pushComment(player, text, options = {}) {
 
 function addComment(player, text) {
   if (!player || !text || !talksInCharacter(player)) return;
-  if (isLuckyFool(player) || isUnluckySmart(player) || isAshot(player)) return;
+  if (isLuckyFool(player) || isUnluckySmart(player) || isAshot(player) || isMama(player)) return;
   pushComment(player, text, { echoLog: true });
 }
 
@@ -1334,6 +1345,7 @@ function playMartPack(kind) {
 
 function markBotTurnBad(player) {
   if (isLuckyFool(player) || isUnluckySmart(player)) botTurnBad = true;
+  if (isMama(player)) mamaTurnBad = true;
 }
 
 function pickUnusedMartLine(bad) {
@@ -1381,12 +1393,127 @@ function finishMartTurn(player) {
   pushComment(player, pickUnusedMartLine(bad), { echoLog: false });
   if (bad) {
     playMartPack(Math.random() < 0.5 ? 'yowl' : 'diarrhea');
+    mamaHearMart('gross');
   } else {
     const roll = Math.random();
     if (roll < 0.3) playMartPack('fart');
     else if (roll < 0.6) playMartPack('meow');
     else if (roll < 0.9) playMartPack('vomit');
     else playMartPack('purr');
+    mamaHearMart(roll < 0.3 || (roll >= 0.6 && roll < 0.9) ? 'gross' : 'turn');
+  }
+}
+
+const MAMA_SOUND_FILES = {
+  lucky: 'sounds/mama/lucky.mp3',
+  quiet: 'sounds/mama/quiet.mp3',
+  mart: 'sounds/mama/mart.mp3',
+  'artem-bed': 'sounds/mama/artem-bed.mp3',
+  'not-funny': 'sounds/mama/not-funny.mp3',
+  'stop-poop': 'sounds/mama/stop-poop.mp3',
+  'not-related': 'sounds/mama/not-related.mp3',
+};
+
+const mamaSoundPlayers = {};
+let mamaSoundTimer = 0;
+
+function getMamaSound(name) {
+  if (!mamaSoundPlayers[name]) {
+    const audio = new Audio(MAMA_SOUND_FILES[name]);
+    audio.preload = 'auto';
+    mamaSoundPlayers[name] = audio;
+  }
+  return mamaSoundPlayers[name];
+}
+
+function preloadMamaSounds() {
+  Object.keys(MAMA_SOUND_FILES).forEach((name) => getMamaSound(name));
+}
+
+function playMamaClip(name) {
+  const file = MAMA_SOUND_FILES[name];
+  if (!file) return;
+  window.clearTimeout(mamaSoundTimer);
+  Object.values(mamaSoundPlayers).forEach((audio) => {
+    audio.pause();
+    audio.currentTime = 0;
+  });
+  const audio = getMamaSound(name);
+  audio.volume = 0.92;
+  const started = audio.play();
+  if (started?.catch) started.catch(() => {});
+}
+
+function mamaSeated() {
+  return state.players.find((player) => isMama(player) && !player.bankrupt) || null;
+}
+
+function isArtem(player) {
+  return player?.name === 'Артём' || player?.botId === 'human2';
+}
+
+const MAMA_MAD_LINES = [
+  'Это не смешно.',
+  'Причём тут это? Не связано! В чём смысл?',
+  'Да что ж такое, всем везёт, мне нет!',
+  'Не нервируйте маму. Уже на нервах.',
+  'Вы все меня бесите этим полем.',
+  'Опять мимо. Кому сказать?',
+  'Ну кто так ходит, а?',
+  'Деньги уходят, а вы молчите.',
+];
+
+function pickMamaMadLine() {
+  const left = MAMA_MAD_LINES.filter((line) => !usedMamaLines.includes(line));
+  const pool = left.length ? left : MAMA_MAD_LINES;
+  const line = pool[Math.floor(Math.random() * pool.length)];
+  usedMamaLines.push(line);
+  if (usedMamaLines.length > MAMA_MAD_LINES.length) usedMamaLines = [];
+  return line;
+}
+
+function mamaHearMart(kind) {
+  const mama = mamaSeated();
+  if (!mama) return;
+  if (kind === 'gross') {
+    playMamaClip('stop-poop');
+    pushComment(mama, 'Заканчивай тему про говно.', { echoLog: false });
+    return;
+  }
+  playMamaClip('mart');
+  pushComment(mama, 'Говносрала надо выбросить.', { echoLog: false });
+}
+
+function mamaWatchRoll(player, dice, total) {
+  const mama = mamaSeated();
+  if (!mama || !player || player.id === mama.id) return;
+  const lucky = dice[0] === dice[1] || total >= 10;
+  if (lucky) {
+    playMamaClip('quiet');
+    pushComment(mama, 'Тихо! Кирюша спит!', { echoLog: false });
+    return;
+  }
+  if (isArtem(player)) {
+    mamaArtemOdd = !mamaArtemOdd;
+    if (mamaArtemOdd) {
+      playMamaClip('artem-bed');
+      pushComment(mama, 'Артём, быстро в кровать!', { echoLog: false });
+    }
+  }
+}
+
+function finishMamaTurn(player) {
+  if (!isMama(player)) return;
+  const bad = mamaTurnBad || botTurnBad || player.bankrupt;
+  if (bad) {
+    const line = pickMamaMadLine();
+    pushComment(player, line, { echoLog: false });
+    playMamaClip(Math.random() < 0.5 ? 'not-funny' : 'not-related');
+    return;
+  }
+  if (mamaTurnLucky) {
+    playMamaClip('lucky');
+    pushComment(player, 'Два миллиона на счёт и я счастлива.', { echoLog: false });
   }
 }
 
@@ -1622,10 +1749,15 @@ function isBot(player) {
 }
 
 const MART_LUCK = 0.9;
+const MAMA_LUCK = 0.7;
 
 function usesLuckBias(player) {
   if (!player || isMiron(player) || isAshot(player)) return false;
-  return player.botKind === 'mart' || player.botKind === 'lokh';
+  return player.botKind === 'mart' || player.botKind === 'lokh' || isMama(player);
+}
+
+function isMama(player) {
+  return player?.botKind === 'mama' || player?.botId === 'mama' || player?.name === 'Мама';
 }
 
 function isLuckyFool(player) {
@@ -1793,7 +1925,7 @@ function martWantsOutOfJail(player) {
 
 async function botThink(player, message) {
   if (message && isMiron(player)) addComment(player, message);
-  await botSleep(isLuckyFool(player) ? 900 : isMiron(player) ? 520 : 400);
+  await botSleep(isLuckyFool(player) ? 900 : isMama(player) ? 680 : isMiron(player) ? 520 : 400);
 }
 
 function talkingBots() {
@@ -1850,6 +1982,7 @@ function messageMentions(text, bot) {
   const haystack = String(text || '').toLowerCase();
   if (isLuckyFool(bot)) return /март|кот|кошак/.test(haystack);
   if (isUnluckySmart(bot)) return /лох|утк/.test(haystack);
+  if (isMama(bot)) return /мам|мама|мамоч/.test(haystack);
   if (isMiron(bot)) return /мирон|сов/.test(haystack);
   if (isAshot(bot)) return /ашот|армян|базар|шашл|виноград|помидор|персик|огурец|арбуз|гранат|зелень|рынок|торг|коалиц|союз|предал|преда/.test(haystack);
   return false;
@@ -1881,6 +2014,20 @@ function chatReplyLine(bot, speaker, text) {
 
   if (isAshot(bot)) {
     return pickUnusedLine(ASHOT_SHORT_LINES, usedAshotVoiceLines);
+  }
+
+  if (isMama(bot)) {
+    if (greeting) return pick(`Привет, ${who}. Деньги на месте?`, 'Здравствуй. Говори по делу.');
+    if (aboutJail) return pick('В клетке хоть не тратишь.', 'Сижу и считаю. Поле подождёт.');
+    if (aboutMoney) return pick('Коплю. Дорогие улицы сами себя не купят.', 'Деньги не разбрасываю. И вам не советую.');
+    if (roast) return pick('Не хами. Я и так на нервах.', 'Ещё слово — и без сладкого.');
+    if (asked) return pick('Не торгуюсь. Считаю и коплю.', `Слушай, ${who}, сначала касса, потом разговоры.`);
+    return pick(
+      `${who}, тише. Я считаю.`,
+      'Не торгуюсь. Даже в чате.',
+      'Сначала касса, потом разговоры.',
+      'Если не про деньги — потом.',
+    );
   }
 
   if (isUnluckySmart(bot)) {
@@ -2272,6 +2419,18 @@ function rollDiceFor(player) {
       first = rollDie();
       second = rollDie();
     }
+  } else if (isMama(player)) {
+    if (first + second <= 8 && Math.random() < MAMA_LUCK) {
+      first = rollDie();
+      second = rollDie();
+    }
+    if (first + second <= 5 && Math.random() < MAMA_LUCK) {
+      first = rollDie();
+      second = rollDie();
+    }
+    const total = first + second;
+    if (total >= 10 || first === second) mamaTurnLucky = true;
+    if (total <= 5) mamaTurnBad = true;
   }
   return [first, second];
 }
@@ -2498,8 +2657,68 @@ function lokhShouldBuy(player, cell) {
   return Math.random() < 0.35;
 }
 
+function mamaCashReserve(player) {
+  const othersDangerous = state.players.some((item) => (
+    item.id !== player.id && !item.bankrupt && countBuildings(item.id).hotels > 0
+  ));
+  const monopolies = ownedMonopolyGroups(player.id).length;
+  let reserve = monopolies === 0 ? 280 : 220;
+  if (othersDangerous) reserve += 140;
+  if (boardIsDangerous(player.id)) reserve += 80;
+  return reserve;
+}
+
+function mamaShouldBuy(player, cell) {
+  if (player.money < cell.price) return false;
+  const after = player.money - cell.price;
+  const reserve = mamaCashReserve(player);
+
+  if (completesSet(player, cell)) {
+    if (isExpensiveStreet(cell)) return after >= 40;
+    return after >= reserve;
+  }
+  if (opponentWouldComplete(cell, player.id) && isExpensiveStreet(cell)) {
+    return after >= 60;
+  }
+  if (cell.type === 'utility') return false;
+  if (cell.type === 'railroad') {
+    return countOwnedOfType(player.id, 'railroad') >= 1 && after >= reserve + 40;
+  }
+  if (isExpensiveStreet(cell)) {
+    if (cell.group && countOwnedInGroup(player.id, cell.group) >= 1) return after >= 80;
+    return after >= Math.min(reserve, 160);
+  }
+  if (cell.type === 'property' && cell.group && countOwnedInGroup(player.id, cell.group) >= 1) {
+    return after >= reserve + 80;
+  }
+  return false;
+}
+
+function mamaMaxBid(player, cell) {
+  const reserve = mamaCashReserve(player);
+  const budget = Math.max(0, player.money - Math.min(reserve, 180));
+  if (budget < 20) return 0;
+  if (completesSet(player, cell) && isExpensiveStreet(cell)) {
+    return Math.min(player.money - 50, Math.floor(cell.price * 1.65));
+  }
+  if (isExpensiveStreet(cell)) {
+    if (cell.group && countOwnedInGroup(player.id, cell.group) >= 1) {
+      return Math.min(budget, Math.floor(cell.price * 1.35));
+    }
+    return Math.min(budget, Math.floor(cell.price * 1.15));
+  }
+  if (completesSet(player, cell)) {
+    return Math.min(budget, Math.floor(cell.price * 1.05));
+  }
+  if (cell.group && countOwnedInGroup(player.id, cell.group) >= 1) {
+    return Math.min(budget, Math.floor(cell.price * 0.8));
+  }
+  return 0;
+}
+
 function botShouldBuy(player, cell) {
   if (isAshot(player)) return ashotShouldBuy(player, cell);
+  if (isMama(player)) return mamaShouldBuy(player, cell);
   if (isUnluckySmart(player)) {
     if (lokhAfraid(completesSet(player, cell) ? 0.38 : 0.58)) return false;
     return martShouldBuy(player, cell);
@@ -2510,6 +2729,7 @@ function botShouldBuy(player, cell) {
 
 function botMaxBid(player, cell) {
   if (isAshot(player)) return ashotMaxBid(player, cell);
+  if (isMama(player)) return mamaMaxBid(player, cell);
   if (isUnluckySmart(player)) {
     if (lokhAfraid(0.42)) return 0;
     const smart = martMaxBid(player, cell);
@@ -2560,6 +2780,13 @@ function purchaseThought(player, cell, want) {
     if (isExpensiveStreet(cell)) return `«${cell.name}» с клетки? Ай-ай, дорого и стыдно. Потом у кого-нибудь куплю.`;
     return `«${cell.name}» подождёт. Ашот лучше поторгуется, чем сам наступит.`;
   }
+  if (isMama(player)) {
+    if (want && completesSet(player, cell)) return `Закрываю «${cell.name}». Дорогая группа кормит кассу.`;
+    if (want && isExpensiveStreet(cell)) return `«${cell.name}» дорогая. Беру. Касса выдержит.`;
+    if (want) return `Беру «${cell.name}». Считаю, что пригодится.`;
+    if (isExpensiveStreet(cell)) return `«${cell.name}» дорогая, но касса не позволяет. Потом.`;
+    return `«${cell.name}» дешёвая. Мне нужны улицы подороже.`;
+  }
   if (isMiron(player)) {
     if (want && completesSet(player, cell)) return `Закрываю «${cell.name}». Частота плюс три дома — это уже рента, не открытка.`;
     if (want && cell.group === 'orange') return 'Оранжевая. После тюрьмы сюда ходят чаще всего. Беру.';
@@ -2600,6 +2827,9 @@ function auctionThought(player, cell, raise) {
   if (isAshot(player)) {
     return raise ? 'Ставлю чуть-чуть. Чтобы потом было что продать.' : 'Дорого для банка. Для людей — другой разговор.';
   }
+  if (isMama(player)) {
+    return raise ? 'Ставлю. Эта улица стоит своих денег.' : 'Дороже кассы. Пас.';
+  }
   if (isMiron(player)) {
     return raise
       ? pickUnusedLine(MIRON_AUCTION_RAISE, usedMironAuctionLines)
@@ -2619,6 +2849,12 @@ function diceThought(player, dice, total) {
     if (dice[0] === dice[1]) return `Дубль ${dice[0]}! Как два шашлыка на одном шампуре.`;
     if (total >= 10) return `${total}. Далеко ушёл. Может, к чужой улице — потом поменяемся.`;
     return `${dice[0]} и ${dice[1]}. Нормально. Главное не цена на клетке, а разговор после.`;
+  }
+  if (isMama(player)) {
+    if (dice[0] === dice[1]) return `Дубль ${dice[0]}. Хоть раз по-человечески.`;
+    if (total >= 10) return `${total}. Далеко и к дорогим клеткам.`;
+    if (total <= 5) return `${total}. Вот это уже не смешно.`;
+    return `${dice[0]} и ${dice[1]}. Считаю дальше.`;
   }
   if (isMiron(player)) {
     if (dice[0] === dice[1]) return `Дубль ${dice[0]}. Вселенная подмигнула. Я не подмигиваю в ответ.`;
@@ -2642,6 +2878,11 @@ function jailThought(player, action, mustLeave) {
     if (action === 'pay') return 'Плачу полтинник. Дешевле, чем сидеть без сделок.';
     return 'Кину. Если не выйдет — ладно, один ход без базара.';
   }
+  if (isMama(player)) {
+    if (action === 'card') return 'Выхожу. На поле ещё есть дорогие улицы без хозяина.';
+    if (action === 'pay') return mustLeave ? 'Третий ход. Плачу, касса цела.' : 'Плачу. Сидеть, пока продают дорогое, глупо.';
+    return 'Посижу. Поле злое, деньги лучше оставить.';
+  }
   if (isMiron(player)) {
     if (action === 'card') return 'Выхожу. На поле ещё есть клетки без хозяина — это не тюрьма, это магазин.';
     if (action === 'pay') return 'Плачу. Ранняя свобода покупает улицы, поздняя — только чужую ренту.';
@@ -2661,6 +2902,11 @@ function buildThought(player, cell, built) {
       ? 'Поставлю домик. Чтобы улица не обижалась, что её всё время продают.'
       : 'Дома потом. Сейчас важнее, у кого что лежит.';
   }
+  if (isMama(player)) {
+    return built
+      ? 'Ставлю дома на дорогие. Аренда должна кормить кассу.'
+      : 'Дома подождут. Сначала подушка.';
+  }
   if (isMiron(player)) {
     return built
       ? 'Ставлю до трёх домов. Четвёртый уже жадность, третий — чемпионат.'
@@ -2672,6 +2918,7 @@ function buildThought(player, cell, built) {
 function mortgageThought(player) {
   if (isLuckyFool(player)) return 'Заложу что покрасивее. Наверное.';
   if (isAshot(player)) return 'Заложу на часок. Это не продажа, это кредит под честное слово.';
+  if (isMama(player)) return 'Заложу дешёвое. Дорогие не трогаю.';
   if (isMiron(player)) return 'Заложу лишнее. Монополию не трогаю — это уже почти искусство.';
   return 'Закладываю лишнее. Монополию не трогаю.';
 }
@@ -2728,13 +2975,42 @@ async function botRaiseCash(player, amount) {
   while (player.money < amount && liquidValue(player) >= amount && guard < 24) {
     const raised = isLuckyFool(player)
       ? lokhRaiseOnce(player)
-      : isMiron(player)
-        ? mironRaiseOnce(player)
-        : martRaiseOnce(player);
+      : isMama(player)
+        ? mamaRaiseOnce(player)
+        : isMiron(player)
+          ? mironRaiseOnce(player)
+          : martRaiseOnce(player);
     if (!raised) break;
     refreshUI();
     guard += 1;
   }
+}
+
+function mamaRaiseOnce(player) {
+  if (mortgageByScore(player, (cell) => {
+    if (cell.group && ownsFullGroup(player.id, cell.group) && isExpensiveStreet(cell)) return 0;
+    if (isExpensiveStreet(cell)) return 8;
+    if (cell.type === 'utility') return 95;
+    if (cell.group === 'brown' || cell.group === 'lightblue') return 88;
+    if (cell.type === 'railroad') return countOwnedOfType(player.id, 'railroad') <= 1 ? 70 : 35;
+    return 55 - (cell.price || 0) / 10;
+  })) return true;
+  return sellEvenHouse(player, ['brown', 'lightblue', 'pink', 'orange']);
+}
+
+function pickMamaBuildCell(player) {
+  const expensiveOrder = { darkblue: 8, green: 7, yellow: 6, red: 5 };
+  const groups = ownedMonopolyGroups(player.id)
+    .filter((group) => !groupHasMortgage(group))
+    .sort((a, b) => (expensiveOrder[b] || 0) - (expensiveOrder[a] || 0) || groupPriority(b) - groupPriority(a));
+  for (const group of groups) {
+    const minHouses = Math.min(...getGroupCells(group).map((cell) => state.titles[cell.id].houses));
+    if (minHouses >= 3 && !expensiveOrder[group]) continue;
+    if (minHouses >= 4) continue;
+    const cell = pickBuildCell(player, group);
+    if (cell) return cell;
+  }
+  return null;
 }
 
 function mironRaiseOnce(player) {
@@ -2795,7 +3071,7 @@ function pickMironBuildCell(player) {
 }
 
 function botUnmortgageIfWanted(player) {
-  if (!isMiron(player) && !isAshot(player)) return;
+  if (!isMiron(player) && !isAshot(player) && !isMama(player)) return;
   const mortgaged = ownedCells(player.id).filter((cell) => state.titles[cell.id]?.mortgaged);
   if (!mortgaged.length) return;
   mortgaged.sort((a, b) => {
@@ -2818,7 +3094,7 @@ function botUnmortgageIfWanted(player) {
 }
 
 async function botBuildIfWanted(player) {
-  if (isMiron(player) || isAshot(player)) botUnmortgageIfWanted(player);
+  if (isMiron(player) || isAshot(player) || isMama(player)) botUnmortgageIfWanted(player);
 
   const groups = ownedMonopolyGroups(player.id);
   if (!groups.length) return;
@@ -2837,6 +3113,28 @@ async function botBuildIfWanted(player) {
       addComment(player, buildThought(player, cell, true));
       refreshUI();
     }
+    return;
+  }
+
+  if (isMama(player)) {
+    let guard = 0;
+    let builtCell = null;
+    while (guard < 12) {
+      const cell = pickMamaBuildCell(player);
+      if (!cell) break;
+      const cost = getHouseCost(cell);
+      const minHouses = Math.min(...getGroupCells(cell.group).map((item) => state.titles[item.id].houses));
+      const expensive = ['red', 'yellow', 'green', 'darkblue'].includes(cell.group);
+      const reserve = minHouses < 3
+        ? (expensive ? 140 : 260)
+        : (boardIsDangerous(player.id) ? 280 : 220);
+      if (player.money - cost < reserve) break;
+      buyHouse(player, cell.id);
+      builtCell = cell;
+      refreshUI();
+      guard += 1;
+    }
+    if (builtCell) addComment(player, buildThought(player, builtCell, true));
     return;
   }
 
@@ -2909,6 +3207,16 @@ async function handleBotJailTurn(player) {
     if (wantOut && player.jailFreeCards.length) action = 'card';
     else if (wantOut && (player.money >= JAIL_FINE + 20 || mustLeave)) action = 'pay';
     else action = 'roll';
+  } else if (isMama(player)) {
+    const expensiveFree = BOARD.some((cell) => (
+      isExpensiveStreet(cell) && state.titles[cell.id]?.ownerId == null
+    ));
+    const wantOut = mustLeave || (expensiveFree && player.money >= mamaCashReserve(player));
+    if (boardIsDangerous(player.id) && !expensiveFree && !mustLeave) {
+      action = 'roll';
+    } else if (wantOut && player.jailFreeCards.length) action = 'card';
+    else if (wantOut && (player.money >= JAIL_FINE + 150 || mustLeave)) action = 'pay';
+    else action = 'roll';
   } else if (isMiron(player)) {
     const wantOut = mustLeave || mironWantsOutOfJail(player);
     if (wantOut && player.jailFreeCards.length) action = 'card';
@@ -2949,6 +3257,7 @@ async function handleBotJailTurn(player) {
   await animateDiceRoll(dice);
   state.lastDice = dice;
   state.lastDiceTotal = total;
+  mamaWatchRoll(player, dice, total);
 
   if (isDoubles) {
     player.inJail = false;
@@ -3016,6 +3325,8 @@ async function runBotTurn() {
   updateActionButtons();
   botTurnBad = false;
   lokhTurnAfraid = false;
+  mamaTurnBad = false;
+  mamaTurnLucky = false;
   ashotSpokeThisTurn = false;
   ashotTurnNote = null;
 
@@ -3035,11 +3346,13 @@ async function runBotTurn() {
       ) {
         await botThink(player, isLuckyFool(player)
           ? 'Сейчас кину. Секунду.'
-          : isAshot(player)
-            ? 'Кидаю. Потом посмотрим, у кого что купить.'
-            : isMiron(player)
-              ? 'Кубики не умеют врать. Люди — сколько угодно.'
-              : 'Считаю бросок.');
+          : isMama(player)
+            ? 'Считаю. Сначала касса, потом клетка.'
+            : isAshot(player)
+              ? 'Кидаю. Потом посмотрим, у кого что купить.'
+              : isMiron(player)
+                ? 'Кубики не умеют врать. Люди — сколько угодно.'
+                : 'Считаю бросок.');
         if (!botTurnAlive(gen, player) || !isBot(player)) break;
         await handleRoll();
         await botSleep(500);
@@ -3062,6 +3375,7 @@ async function runBotTurn() {
   finishMartTurn(player);
   finishLokhTurn(player);
   finishAshotTurn(player);
+  finishMamaTurn(player);
   if (state.winnerId != null) return;
   if (getActivePlayer() !== player) return;
   if (!isBot(player)) return;
@@ -3342,6 +3656,21 @@ function drawCard(deckName, actor) {
     if (pick.score > (natural?.score ?? pick.score)) {
       setLog('Марту снова везёт с картами, хоть он этого и не заслужил.');
     }
+    return chosen;
+  }
+
+  if (isMama(actor)) {
+    const scored = deck.map((card, index) => ({
+      card,
+      index,
+      score: scoreCardForLuck(card, actor),
+    })).sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    const natural = scored.find((item) => item.index === deck.length - 1);
+    const pick = Math.random() < MAMA_LUCK ? best : natural;
+    const [chosen] = deck.splice(pick.index, 1);
+    if ((pick.score ?? 0) < 0) mamaTurnBad = true;
+    if ((pick.score ?? 0) >= 80) mamaTurnLucky = true;
     return chosen;
   }
 
@@ -4395,6 +4724,7 @@ function martAcceptsTrade(bot, deal, score) {
 }
 
 function botAcceptsTrade(bot, deal) {
+  if (isMama(bot)) return false;
   const score = scoreTradeForBot(bot, deal);
 
   if (score.cashAfter < 0) return false;
@@ -4473,6 +4803,9 @@ function tradeThought(player, deal, accepted) {
     return accepted
       ? `Беру. Честно, почти как родному. Плюс примерно ₽ ${formatMoney(score.net)}.`
       : 'Не-е, браток. Так не базар.';
+  }
+  if (isMama(player)) {
+    return 'Не торгуюсь. Даже если выгодно.';
   }
   if (isUnluckySmart(player)) {
     return accepted
@@ -4667,16 +5000,19 @@ async function offerPurchase(player, cell) {
   if (isBot(player)) {
     let want = isAshot(player)
       ? ashotShouldBuy(player, cell)
-      : isUnluckySmart(player)
-        ? martShouldBuy(player, cell)
-        : isMiron(player)
-          ? mironShouldBuy(player, cell)
-          : lokhShouldBuy(player, cell);
+      : isMama(player)
+        ? mamaShouldBuy(player, cell)
+        : isUnluckySmart(player)
+          ? martShouldBuy(player, cell)
+          : isMiron(player)
+            ? mironShouldBuy(player, cell)
+            : lokhShouldBuy(player, cell);
     const raiseFor = completesSet(player, cell)
-      || ((isMiron(player) || isAshot(player)) && cell.group && countOwnedInGroup(player.id, cell.group) >= 1)
-      || ((isMiron(player) || isAshot(player)) && opponentWouldComplete(cell, player.id))
+      || ((isMiron(player) || isAshot(player) || isMama(player)) && cell.group && countOwnedInGroup(player.id, cell.group) >= 1)
+      || ((isMiron(player) || isAshot(player) || (isMama(player) && isExpensiveStreet(cell))) && opponentWouldComplete(cell, player.id))
+      || (isMama(player) && isExpensiveStreet(cell))
       || (isMiron(player) && (cell.type === 'railroad' || (cell.group && mironGroupEdge(cell.group) >= 78)));
-    if (want && player.money < cell.price && (isUnluckySmart(player) || isMiron(player) || isAshot(player)) && raiseFor) {
+    if (want && player.money < cell.price && (isUnluckySmart(player) || isMiron(player) || isAshot(player) || isMama(player)) && raiseFor) {
       await botRaiseCash(player, cell.price);
     }
     want = want && player.money >= cell.price;
@@ -5111,6 +5447,7 @@ async function handleJailTurn(player) {
     await animateDiceRoll(dice);
     state.lastDice = dice;
     state.lastDiceTotal = total;
+    mamaWatchRoll(player, dice, total);
 
     if (isDoubles) {
       player.inJail = false;
@@ -5229,6 +5566,7 @@ async function handleRoll() {
   await animateDiceRoll(dice);
   state.lastDice = dice;
   state.lastDiceTotal = total;
+  mamaWatchRoll(player, dice, total);
 
   if (isDoubles && !state.rolledOutOfJail) state.consecutiveDoubles += 1;
   else state.consecutiveDoubles = 0;
@@ -5317,6 +5655,7 @@ function init() {
   window.addEventListener('pointerdown', () => {
     unlockSpeech();
     preloadMartSounds();
+    preloadMamaSounds();
   }, { once: true });
   window.speechSynthesis?.addEventListener?.('voiceschanged', () => pickRussianVoice());
   window.addEventListener('resize', () => renderTokens());

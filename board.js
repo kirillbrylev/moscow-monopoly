@@ -393,6 +393,17 @@ export const PLAYER_CATALOG = [
     defaultOn: true,
     blurb: 'опытный продавец фруктов из Сочи',
   },
+  {
+    key: 'mama',
+    name: 'Мама',
+    token: '👩',
+    color: '#B71C5A',
+    isBot: true,
+    botId: 'mama',
+    botKind: 'mama',
+    defaultOn: true,
+    blurb: 'мама · копит и считает',
+  },
 ];
 
 export const PLAYERS = PLAYER_CATALOG

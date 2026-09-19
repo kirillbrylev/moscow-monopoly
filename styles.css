@@ -331,6 +331,17 @@ body {
   color: #f48fb1;
 }
 
+.player-card--mama {
+  background:
+    linear-gradient(180deg, rgba(183, 28, 90, 0.18), transparent 46%),
+    var(--bg-panel);
+  border-color: rgba(183, 28, 90, 0.42);
+}
+
+.player-card--mama .player-card__role {
+  color: #f48fb1;
+}
+
 .player-card__badge {
   font-size: 0.55rem;
   padding: 2px 6px;
