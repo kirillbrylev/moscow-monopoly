@@ -2724,38 +2724,88 @@ function mamaShouldBuy(player, cell) {
     return after >= 60;
   }
   if (cell.type === 'utility') return false;
-  if (cell.type === 'railroad') {
-    return countOwnedOfType(player.id, 'railroad') >= 1 && after >= reserve + 40;
-  }
   if (isExpensiveStreet(cell)) {
     if (cell.group && countOwnedInGroup(player.id, cell.group) >= 1) return after >= 80;
     return after >= Math.min(reserve, 160);
   }
-  if (cell.type === 'property' && cell.group && countOwnedInGroup(player.id, cell.group) >= 1) {
-    return after >= reserve + 80;
-  }
+  if (cell.type === 'railroad') return after >= reserve + 40;
+  if (cell.type === 'property') return after >= reserve + 60;
   return false;
 }
 
-function mamaMaxBid(player, cell) {
-  const reserve = mamaCashReserve(player);
-  const budget = Math.max(0, player.money - Math.min(reserve, 180));
-  if (budget < 20) return 0;
-  if (completesSet(player, cell) && isExpensiveStreet(cell)) {
-    return Math.min(player.money - 50, Math.floor(cell.price * 1.65));
+function mamaKeepsStreet(player, cell) {
+  if (!cell) return true;
+  if (isExpensiveStreet(cell)) return true;
+  if (cell.group && ownsFullGroup(player.id, cell.group)) return true;
+  return false;
+}
+
+function mamaSpareStreet(player, avoidId) {
+  const cells = tradeableFreeCells(player).filter((cell) => (
+    cell.id !== avoidId && !mamaKeepsStreet(player, cell)
+  ));
+  if (!cells.length) return null;
+  return cells.sort((a, b) => (a.price || 0) - (b.price || 0))[0];
+}
+
+function mamaWantsStreet(cell) {
+  return Boolean(cell && canTradeTitle(cell) && isExpensiveStreet(cell));
+}
+
+function mamaWantsToTrade(player) {
+  if (!mamaSpareStreet(player) && player.money < mamaCashReserve(player) + 180) return false;
+  return tradePartners(player).some((partner) => (
+    tradeableFreeCells(partner).some((cell) => mamaWantsStreet(cell))
+  ));
+}
+
+function buildMamaTrade(mama) {
+  const targets = [];
+  tradePartners(mama).forEach((partner) => {
+    tradeableFreeCells(partner).forEach((cell) => {
+      if (!mamaWantsStreet(cell)) return;
+      let score = cell.price || 0;
+      if (completesSet(mama, cell)) score += 420;
+      else if (cell.group && countOwnedInGroup(mama.id, cell.group) >= 1) score += 140;
+      targets.push({ partner, cell, score });
+    });
+  });
+  targets.sort((a, b) => b.score - a.score);
+
+  for (const { partner, cell } of targets) {
+    const offer = mamaSpareStreet(mama, cell.id);
+    const keep = mamaCashReserve(mama);
+    const gap = Math.max(0, (cell.price || 0) - (offer?.price || 0));
+    const pay = Math.max(0, Math.min(mama.money - keep, Math.floor(gap * (offer ? 0.8 : 1.05))));
+    if (!offer && pay < (cell.price || 0) * 0.85) continue;
+    if (offer && completesSet(partner, offer) && isExpensiveStreet(offer)) continue;
+    const deal = {
+      from: mama,
+      to: partner,
+      giveCells: offer ? [offer] : [],
+      getCells: [cell],
+      giveMoney: pay,
+      getMoney: 0,
+      giveCards: 0,
+      getCards: 0,
+    };
+    if (!dealHasContent(deal) || validateTrade(deal)) continue;
+    return deal;
   }
-  if (isExpensiveStreet(cell)) {
-    if (cell.group && countOwnedInGroup(player.id, cell.group) >= 1) {
-      return Math.min(budget, Math.floor(cell.price * 1.35));
-    }
-    return Math.min(budget, Math.floor(cell.price * 1.15));
-  }
-  if (completesSet(player, cell)) {
-    return Math.min(budget, Math.floor(cell.price * 1.05));
-  }
-  if (cell.group && countOwnedInGroup(player.id, cell.group) >= 1) {
-    return Math.min(budget, Math.floor(cell.price * 0.8));
-  }
+  return null;
+}
+
+function mamaAcceptsTrade(bot, deal) {
+  const receives = deal.giveCells;
+  const gives = deal.getCells;
+  if (!receives.some((cell) => mamaWantsStreet(cell))) return false;
+  if (gives.some((cell) => mamaKeepsStreet(bot, cell))) return false;
+  if (gives.some((cell) => cell.group && ownsFullGroup(bot.id, cell.group))) return false;
+  if (deal.getMoney > deal.giveMoney + 20) return false;
+  return bot.money - deal.getMoney + deal.giveMoney >= 40;
+}
+
+function mamaMaxBid() {
   return 0;
 }
 
@@ -2826,9 +2876,9 @@ function purchaseThought(player, cell, want) {
   if (isMama(player)) {
     if (want && completesSet(player, cell)) return `Закрываю «${cell.name}». Дорогая группа кормит кассу.`;
     if (want && isExpensiveStreet(cell)) return `«${cell.name}» дорогая. Беру. Касса выдержит.`;
-    if (want) return `Беру «${cell.name}». Считаю, что пригодится.`;
+    if (want) return `Беру «${cell.name}». Потом обменяю на дорогую.`;
     if (isExpensiveStreet(cell)) return `«${cell.name}» дорогая, но касса не позволяет. Потом.`;
-    return `«${cell.name}» дешёвая. Мне нужны улицы подороже.`;
+    return `«${cell.name}» сейчас не нужна и на обмен не тянет.`;
   }
   if (isMiron(player)) {
     if (want && completesSet(player, cell)) return `Закрываю «${cell.name}». Частота плюс три дома — это уже рента, не открытка.`;
@@ -2871,7 +2921,7 @@ function auctionThought(player, cell, raise) {
     return raise ? 'Ставлю чуть-чуть. Чтобы потом было что продать.' : 'Дорого для банка. Для людей — другой разговор.';
   }
   if (isMama(player)) {
-    return raise ? 'Ставлю. Эта улица стоит своих денег.' : 'Дороже кассы. Пас.';
+    return 'Не торгуюсь. Цена банка — или пусть забирают.';
   }
   if (isMiron(player)) {
     return raise
@@ -3403,7 +3453,7 @@ async function runBotTurn() {
 
       if (botTurnAlive(gen, player) && isBot(player) && state.turnPhase === 'post-land' && !player.inJail) {
         await botBuildIfWanted(player);
-        if (botTurnAlive(gen, player) && (isLuckyFool(player) || isMiron(player) || isAshot(player))) {
+        if (botTurnAlive(gen, player) && (isLuckyFool(player) || isMiron(player) || isAshot(player) || isMama(player))) {
           await botTryTrade(player);
         }
       }
@@ -4549,6 +4599,15 @@ async function botTryTrade(player) {
     return;
   }
 
+  if (isMama(player) && mamaWantsToTrade(player)) {
+    const deal = buildMamaTrade(player);
+    if (deal) {
+      setLog(`${player.name} предлагает сделку ${deal.to.name}.`);
+      await resolveTrade(deal);
+    }
+    return;
+  }
+
   let deal = null;
   if (isLuckyFool(player) && martWantsToTrade(player)) {
     deal = buildMartTrade(player);
@@ -4767,7 +4826,7 @@ function martAcceptsTrade(bot, deal, score) {
 }
 
 function botAcceptsTrade(bot, deal) {
-  if (isMama(bot)) return false;
+  if (isMama(bot)) return mamaAcceptsTrade(bot, deal);
   const score = scoreTradeForBot(bot, deal);
 
   if (score.cashAfter < 0) return false;
@@ -4848,7 +4907,9 @@ function tradeThought(player, deal, accepted) {
       : 'Не-е, браток. Так не базар.';
   }
   if (isMama(player)) {
-    return 'Не торгуюсь. Даже если выгодно.';
+    return accepted
+      ? 'Меняю дешёвое на дорогую. Так и задумано.'
+      : 'Это не на дорогую. Не надо.';
   }
   if (isUnluckySmart(player)) {
     return accepted
@@ -5118,7 +5179,7 @@ async function offerPurchase(player, cell) {
 }
 
 async function runAuction(cell) {
-  const bidders = state.players.filter((player) => !player.bankrupt);
+  const bidders = state.players.filter((player) => !player.bankrupt && !isMama(player));
   let currentBid = 0;
   let leaderId = null;
   const passed = new Set();
