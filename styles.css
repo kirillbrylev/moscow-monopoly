@@ -2205,3 +2205,41 @@ body {
   line-height: 1.4;
   color: var(--text-muted);
 }
+
+/* Режим «Нострадамус» */
+.nostradamus {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-nostradamus {
+  padding: 12px 14px;
+  border: 1px solid rgba(186, 140, 255, 0.55);
+  border-radius: 12px;
+  background: linear-gradient(135deg, #3b2766 0%, #5a3a9a 100%);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(90, 58, 154, 0.35);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.btn-nostradamus:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(90, 58, 154, 0.5);
+}
+
+.btn-nostradamus:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.nostradamus__status {
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}

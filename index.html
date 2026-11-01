@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=PT+Serif:wght@700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=odds" />
+  <link rel="stylesheet" href="styles.css?v=nostradamus" />
 </head>
 <body>
   <div class="app">
@@ -88,6 +88,10 @@
           </div>
           <div class="odds-list" id="odds-list"></div>
           <p class="odds-panel__foot">Считается из текущей позиции: деньги, улицы, дома, залоги. Стрелка — изменение за текущий ход.</p>
+        </section>
+        <section class="nostradamus">
+          <button class="btn-nostradamus" id="nostradamus-btn" type="button">🔮 Нострадамус</button>
+          <p class="nostradamus__status" id="nostradamus-status">Соберёт досье партии и скриншот для пророчества Claude.</p>
         </section>
         <div class="commentary-panel" hidden>
           <div class="commentary-feed" id="commentary-feed" aria-live="polite"></div>
@@ -179,6 +183,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=odds"></script>
+  <script type="module" src="app.js?v=nostradamus"></script>
 </body>
 </html>

@@ -52,6 +52,11 @@ let gameGen = 0;
 let botRunning = false;
 let matchActive = false;
 const logHistory = [];
+// Полный журнал партии и история шансов — для режима «Нострадамус».
+const JOURNAL_LIMIT = 3000;
+let gameJournal = [];
+let oddsHistory = [];
+let turnCounter = 0;
 const commentHistory = [];
 let usedMartLines = [];
 let usedMironAuctionLines = [];
@@ -111,6 +116,8 @@ const lobbyErrorEl = document.getElementById('lobby-error');
 const continueBtn = document.getElementById('continue-btn');
 const startGameBtn = document.getElementById('start-game-btn');
 const oddsListEl = document.getElementById('odds-list');
+const nostradamusBtn = document.getElementById('nostradamus-btn');
+const nostradamusStatusEl = document.getElementById('nostradamus-status');
 const commentaryFeedEl = document.getElementById('commentary-feed');
 const commentaryFormEl = document.getElementById('commentary-form');
 const commentaryInputEl = document.getElementById('commentary-input');
@@ -191,6 +198,9 @@ function persistGame(message) {
       savedAt: Date.now(),
       log: gameLogEl.textContent,
       comments: commentHistory.slice(),
+      journal: gameJournal.slice(),
+      oddsHistory: oddsHistory.slice(),
+      turnCounter,
       usedMartLines: usedMartLines.slice(),
       usedMironAuctionLines: usedMironAuctionLines.slice(),
       ashotAllyId,
@@ -274,6 +284,9 @@ function restoreFromSnapshot(snapshot) {
 
   migrateHumanNames(state.players);
   restoreComments(snapshot.comments || game.comments);
+  gameJournal = Array.isArray(snapshot.journal) ? snapshot.journal.slice() : [];
+  oddsHistory = Array.isArray(snapshot.oddsHistory) ? snapshot.oddsHistory.slice() : [];
+  turnCounter = Number(snapshot.turnCounter) || 0;
   usedMartLines = Array.isArray(snapshot.usedMartLines) ? snapshot.usedMartLines.slice() : [];
   usedMironAuctionLines = Array.isArray(snapshot.usedMironAuctionLines) ? snapshot.usedMironAuctionLines.slice() : [];
   ashotAllyId = Number.isInteger(snapshot.ashotAllyId) ? snapshot.ashotAllyId : null;
@@ -404,6 +417,9 @@ function beginMatch(roster) {
   setDiceReadout(null, null);
   clearComments();
   usedMartLines = [];
+  gameJournal = [];
+  oddsHistory = [];
+  turnCounter = 0;
   usedMemeLines = [];
   usedMartTradeLines = [];
   usedMironAuctionLines = [];
@@ -942,7 +958,180 @@ function updateOdds() {
     oddsTurnIndex = state.activePlayerIndex;
   }
   oddsCurrent = next;
+  const last = oddsHistory[oddsHistory.length - 1];
+  if (matchActive && (!last || last.turn !== turnCounter)) {
+    oddsHistory.push({
+      turn: turnCounter,
+      odds: Object.fromEntries(state.players.map((player, index) => [player.name, Math.round(next[index] * 100)])),
+    });
+    if (oddsHistory.length > 600) oddsHistory.shift();
+  } else if (last && last.turn === turnCounter) {
+    last.odds = Object.fromEntries(state.players.map((player, index) => [player.name, Math.round(next[index] * 100)]));
+  }
   renderOdds();
+}
+
+// ——— Режим «Нострадамус» ———
+// Собирает досье партии (состояние, журнал, история шансов) и скриншот.
+// Досье копируется в буфер и скачивается, его вставляют в чат с Claude.
+
+// html2canvas не понимает color-mix() из styles.css, html-to-image рисует силами браузера.
+const HTML_TO_IMAGE_URL = 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js';
+let htmlToImageLoading = null;
+
+function loadHtmlToImage() {
+  if (window.htmlToImage) return Promise.resolve(window.htmlToImage);
+  htmlToImageLoading ||= new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = HTML_TO_IMAGE_URL;
+    script.onload = () => resolve(window.htmlToImage);
+    script.onerror = () => {
+      htmlToImageLoading = null;
+      reject(new Error('html-to-image'));
+    };
+    document.head.appendChild(script);
+  });
+  return htmlToImageLoading;
+}
+
+function playerKindLabel(player) {
+  if (!player.isBot) return 'человек';
+  const entry = PLAYER_CATALOG.find((item) => item.botKind === player.botKind || item.name === player.name);
+  return `бот (${player.botKind || 'bot'}) · ${entry?.blurb || ''}`.trim();
+}
+
+function playerAssets(player) {
+  const cells = BOARD.filter((cell) => isTitleCell(cell) && state.titles[cell.id]?.ownerId === player.id);
+  let worth = player.money;
+  const items = cells.map((cell) => {
+    const title = state.titles[cell.id];
+    worth += title.mortgaged ? 0 : getMortgageValue(cell);
+    worth += (title.houses || 0) * getHouseCost(cell) / 2;
+    return {
+      name: cell.name,
+      type: cell.type,
+      group: cell.group ? PROPERTY_GROUPS[cell.group].label : null,
+      price: cell.price,
+      houses: title.houses || 0,
+      mortgaged: Boolean(title.mortgaged),
+      rentNow: getRent(cell, 7),
+    };
+  });
+  const monopolies = Object.keys(PROPERTY_GROUPS)
+    .filter((group) => ownsAllInGroup(player.id, group))
+    .map((group) => PROPERTY_GROUPS[group].label);
+  return { items, monopolies, liquidationValue: worth };
+}
+
+function buildNostradamusDossier() {
+  const active = getActivePlayer();
+  const players = state.players.map((player, index) => {
+    const assets = playerAssets(player);
+    return {
+      name: player.name,
+      token: player.token,
+      kind: playerKindLabel(player),
+      money: player.money,
+      position: `${player.position} · ${BOARD[player.position]?.name || ''}`,
+      inJail: player.inJail,
+      jailTurns: player.jailTurns,
+      jailFreeCards: player.jailFreeCards.length,
+      bankrupt: player.bankrupt,
+      winOddsNow: `${Math.round((oddsCurrent[index] || 0) * 100)}%`,
+      liquidationValue: assets.liquidationValue,
+      monopolies: assets.monopolies,
+      properties: assets.items,
+    };
+  });
+  const unowned = BOARD
+    .filter((cell) => isTitleCell(cell) && state.titles[cell.id]?.ownerId == null)
+    .map((cell) => `${cell.name} (${cell.group ? PROPERTY_GROUPS[cell.group].label : cell.type}, ₽${cell.price})`);
+
+  return {
+    game: 'Монополия — Москва',
+    createdAt: new Date().toISOString(),
+    turn: turnCounter,
+    activePlayer: active?.name,
+    turnPhase: state.turnPhase,
+    lastDice: state.lastDice,
+    houseRules: [
+      'За ход можно сделать только одно предложение обмена.',
+      'Боты: Март — везучий и глупый кот; Лох — умный, невезучий, трусливый; Мирон — считает вероятности; Ашот — торговец, любит сделки и коалиции; Мама — копит, не торгуется на аукционах.',
+    ],
+    bank: state.bank,
+    players,
+    unowned,
+    ashotAlly: ashotCurrentAlly()?.name || null,
+    oddsHistory,
+    journal: gameJournal.map((entry) => `[ход ${entry.turn}${entry.player ? ` · ${entry.player}` : ''}] ${entry.text}`),
+    botChat: commentHistory.map((entry) => `${entry.name}: ${entry.text}`),
+  };
+}
+
+function nostradamusPrompt(dossier) {
+  return [
+    '🔮 Нострадамус, вот досье партии «Монополия — Москва».',
+    'Проанализируй ход игры и предскажи финал: кто выиграет и кто вылетит первым,',
+    'какие планы и ходы у каждого игрока, ключевые моменты партии и где кто ошибся.',
+    '',
+    '```json',
+    JSON.stringify(dossier, null, 1),
+    '```',
+  ].join('\n');
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function setNostradamusStatus(text) {
+  if (nostradamusStatusEl) nostradamusStatusEl.textContent = text;
+}
+
+async function handleNostradamus() {
+  if (!matchActive || !nostradamusBtn) return;
+  nostradamusBtn.disabled = true;
+  setNostradamusStatus('Собираю досье…');
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  const text = nostradamusPrompt(buildNostradamusDossier());
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    copied = true;
+  } catch (error) {
+    copied = false;
+  }
+  downloadBlob(new Blob([text], { type: 'text/markdown;charset=utf-8' }), `nostradamus-${stamp}.md`);
+
+  let shot = false;
+  try {
+    setNostradamusStatus('Делаю скриншот…');
+    const htmlToImage = await loadHtmlToImage();
+    const blob = await htmlToImage.toBlob(document.querySelector('.app'), {
+      backgroundColor: '#1a2744',
+      pixelRatio: Math.min(2, window.devicePixelRatio || 1),
+    });
+    if (blob) {
+      downloadBlob(blob, `nostradamus-${stamp}.png`);
+      shot = true;
+    }
+  } catch (error) {
+    shot = false;
+  }
+
+  setNostradamusStatus([
+    copied ? 'Досье скопировано и скачано.' : 'Досье скачано (буфер обмена недоступен).',
+    shot ? 'Скриншот скачан.' : 'Скриншот не получился.',
+    'Вставьте досье в чат с Claude и приложите скриншот — будет пророчество.',
+  ].join(' '));
+  nostradamusBtn.disabled = false;
 }
 
 function renderOdds() {
@@ -1218,6 +1407,10 @@ function escapeHtml(text) {
 }
 
 function setLog(message) {
+  if (matchActive && message) {
+    gameJournal.push({ turn: turnCounter, player: getActivePlayer()?.name || '', text: message });
+    if (gameJournal.length > JOURNAL_LIMIT) gameJournal.shift();
+  }
   logHistory.push(message);
   if (logHistory.length > 6) logHistory.shift();
   gameLogEl.innerHTML = logHistory.map((line) => `<div>${escapeHtml(line)}</div>`).join('');
@@ -1600,6 +1793,7 @@ function speakText(text, { rate = 0.95, pitch = 0.75 } = {}) {
   const voice = pickRussianVoice();
   if (voice) utter.voice = voice;
   synth.cancel();
+  synth.resume();
   window.setTimeout(() => synth.speak(utter), 40);
 }
 
@@ -1806,6 +2000,8 @@ function finishLokhTurn(player) {
   speakText(line);
 }
 
+// Клипы озвучены Edge TTS: Март — ru-RU-DmitryNeural высоко и быстро,
+// Лох — ru-RU-DmitryNeural низко и медленно. Файл = номер строки в списке.
 const MART_MEME_LINES = [
   'Ничего не понял, но очень интересно.',
   'Окак.',
@@ -1821,6 +2017,16 @@ const MART_MEME_LINES = [
   'Жиза.',
   'Учись, студент.',
   'Я в своём познании настолько преисполнился…',
+  'Сигма-кот на районе.',
+  'Я сделаю тебе предложение, от которого ты не сможешь отказаться.',
+  'Ну, погоди!',
+  'Это я удачно зашёл.',
+  'Кто молодец? Я молодец!',
+  'Ты не пройдёшь!',
+  'Нормально же общались.',
+  'Зачем мне деньги? Я кот.',
+  'Шах и мат.',
+  'Вжух — и ты банкрот.',
 ];
 
 const LOKH_MEME_LINES = [
@@ -1837,11 +2043,44 @@ const LOKH_MEME_LINES = [
   'Я же говорил. Меня никто не слушает.',
   'Это норма? Это не норма.',
   'Кря. В смысле — всё под контролем.',
+  'Ну всё, приехали.',
+  'Я устал, я ухожу.',
+  'Это не баг, это фича.',
+  'Что-то пошло не так.',
+  'Помедленнее, я записываю.',
+  'Где деньги, Лебовски?',
+  'Опять работа?',
+  'Я в домике.',
+  'Ещё один такой ход — и я пропал.',
+  'Мама, я в телевизоре! В смысле, в тюрьме.',
 ];
 
-const MEME_CHANCE = 0.35;
+const MEME_CHANCE = 0.55;
 const MART_VOICE = { rate: 1.2, pitch: 1.9 };
 const LOKH_VOICE = { rate: 0.9, pitch: 0.6 };
+const memeSoundPlayers = {};
+
+function memeClipPath(player, line) {
+  const pool = isLuckyFool(player) ? MART_MEME_LINES : LOKH_MEME_LINES;
+  const index = pool.indexOf(line);
+  if (index < 0) return null;
+  return `sounds/${isLuckyFool(player) ? 'mart' : 'lokh'}/meme-${String(index + 1).padStart(2, '0')}.mp3`;
+}
+
+function playMemeClip(player, line) {
+  const file = memeClipPath(player, line);
+  if (!file) return false;
+  const audio = memeSoundPlayers[file] || (memeSoundPlayers[file] = new Audio(file));
+  Object.values(memeSoundPlayers).forEach((item) => {
+    item.pause();
+    item.currentTime = 0;
+  });
+  audio.volume = 0.95;
+  const started = audio.play();
+  // Нет файла или браузер не дал играть — говорим голосом браузера.
+  if (started?.catch) started.catch(() => speakText(line, isLuckyFool(player) ? MART_VOICE : LOKH_VOICE));
+  return true;
+}
 
 function sayRandomMeme(player) {
   if (player.bankrupt || Math.random() >= MEME_CHANCE) return;
@@ -1851,8 +2090,9 @@ function sayRandomMeme(player) {
   if (!pool) return;
   const line = pickUnusedLine(pool, usedMemeLines);
   pushComment(player, line, { echoLog: true });
-  // Март — писклявый и быстрый кот, Лох — низкий и неуверенный.
-  speakText(line, isLuckyFool(player) ? MART_VOICE : LOKH_VOICE);
+  // Март говорит после своего звука, иначе фразу не слышно.
+  if (isLuckyFool(player)) window.setTimeout(() => playMemeClip(player, line), 1300);
+  else playMemeClip(player, line);
 }
 
 function clearComments() {
@@ -5755,6 +5995,7 @@ async function startTurn() {
   clearExtraRoll();
   state.rolledOutOfJail = false;
   state.tradeOffered = false;
+  turnCounter += 1;
   state.turnPhase = 'pre-roll';
   resetHouseBuyCredit();
   refreshUI();
@@ -5883,6 +6124,7 @@ function init() {
   saveBtn.addEventListener('click', handleSave);
   newGameBtn.addEventListener('click', handleNewGame);
   startGameBtn?.addEventListener('click', handleStartGame);
+  nostradamusBtn?.addEventListener('click', handleNostradamus);
   continueBtn?.addEventListener('click', handleContinueGame);
   commentaryFormEl?.addEventListener('submit', handleChatSubmit);
   commentarySpeakerRowEl?.addEventListener('click', handleSpeakerClick);
