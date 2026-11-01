@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=PT+Serif:wght@700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=mama" />
+  <link rel="stylesheet" href="styles.css?v=odds" />
 </head>
 <body>
   <div class="app">
@@ -81,7 +81,15 @@
       </section>
 
       <aside class="info-panel">
-        <div class="commentary-panel">
+        <section class="odds-panel" aria-live="polite">
+          <div class="odds-panel__head">
+            <h2 class="panel-title">Шансы на победу</h2>
+            <span class="odds-panel__note">1000 симуляций</span>
+          </div>
+          <div class="odds-list" id="odds-list"></div>
+          <p class="odds-panel__foot">Считается из текущей позиции: деньги, улицы, дома, залоги. Стрелка — изменение за текущий ход.</p>
+        </section>
+        <div class="commentary-panel" hidden>
           <div class="commentary-feed" id="commentary-feed" aria-live="polite"></div>
           <form class="commentary-compose" id="commentary-form">
             <div class="commentary-compose__who" id="commentary-speaker-row" hidden></div>
@@ -171,6 +179,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=mama-swap"></script>
+  <script type="module" src="app.js?v=odds"></script>
 </body>
 </html>

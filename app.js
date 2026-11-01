@@ -23,6 +23,7 @@ import {
   nextCellOfType,
   shuffle,
 } from './board.js';
+import { estimateWinOdds } from './odds.js';
 
 function createPlayers(roster = PLAYERS) {
   return roster.map((player, index) => ({
@@ -67,6 +68,7 @@ let houseBuyCredit = {};
 let botTurnBad = false;
 let lokhTurnAfraid = false;
 let usedLokhLines = [];
+let usedMemeLines = [];
 let usedMamaLines = [];
 let mamaTurnBad = false;
 let mamaTurnLucky = false;
@@ -108,6 +110,7 @@ const lobbySeatsEl = document.getElementById('lobby-seats') || document.getEleme
 const lobbyErrorEl = document.getElementById('lobby-error');
 const continueBtn = document.getElementById('continue-btn');
 const startGameBtn = document.getElementById('start-game-btn');
+const oddsListEl = document.getElementById('odds-list');
 const commentaryFeedEl = document.getElementById('commentary-feed');
 const commentaryFormEl = document.getElementById('commentary-form');
 const commentaryInputEl = document.getElementById('commentary-input');
@@ -153,6 +156,7 @@ function freshState(roster) {
     busy: false,
     winnerId: null,
     rolledOutOfJail: false,
+    tradeOffered: false,
   };
 }
 
@@ -216,6 +220,7 @@ function persistGame(message) {
         turnPhase: state.turnPhase,
         winnerId: state.winnerId,
         rolledOutOfJail: state.rolledOutOfJail,
+        tradeOffered: state.tradeOffered,
       },
     };
 
@@ -264,6 +269,7 @@ function restoreFromSnapshot(snapshot) {
     turnPhase: game.turnPhase || 'pre-roll',
     winnerId: game.winnerId ?? null,
     rolledOutOfJail: Boolean(game.rolledOutOfJail),
+    tradeOffered: Boolean(game.tradeOffered),
   });
 
   migrateHumanNames(state.players);
@@ -398,6 +404,7 @@ function beginMatch(roster) {
   setDiceReadout(null, null);
   clearComments();
   usedMartLines = [];
+  usedMemeLines = [];
   usedMartTradeLines = [];
   usedMironAuctionLines = [];
   usedMironTradeLines = [];
@@ -884,7 +891,7 @@ function updateActionButtons() {
 
   rollBtn.disabled = !canRoll;
   manageBtn.disabled = gameOver || state.busy || !humanTurn;
-  if (tradeBtn) tradeBtn.disabled = gameOver || state.busy || !humanTurn;
+  if (tradeBtn) tradeBtn.disabled = gameOver || state.busy || !humanTurn || state.tradeOffered;
   endTurnBtn.hidden = !canEnd;
   if (!humanTurn && !gameOver) {
     const watching = matchActive && !state.players.some((item) => !isBot(item));
@@ -902,6 +909,65 @@ function refreshUI() {
   renderTokens();
   if (previewCellId != null) showPropertyPreview(BOARD[previewCellId] || null);
   updateChatCompose();
+  scheduleOdds();
+}
+
+let oddsTimer = null;
+let oddsKey = '';
+let oddsCurrent = [];
+let oddsTurnStart = [];
+let oddsTurnIndex = null;
+
+function scheduleOdds() {
+  clearTimeout(oddsTimer);
+  oddsTimer = setTimeout(updateOdds, 250);
+}
+
+function updateOdds() {
+  if (!oddsListEl || !state.players?.length) return;
+  const key = JSON.stringify([
+    state.players.map((player) => [player.name, player.money, player.position, player.inJail, player.bankrupt]),
+    state.titles,
+    state.activePlayerIndex,
+  ]);
+  if (key === oddsKey) return;
+  oddsKey = key;
+
+  const next = estimateWinOdds(state.players, state.titles, state.activePlayerIndex, 7);
+  if (oddsCurrent.length !== next.length) {
+    oddsTurnStart = next;
+    oddsTurnIndex = state.activePlayerIndex;
+  } else if (oddsTurnIndex !== state.activePlayerIndex) {
+    oddsTurnStart = oddsCurrent;
+    oddsTurnIndex = state.activePlayerIndex;
+  }
+  oddsCurrent = next;
+  renderOdds();
+}
+
+function renderOdds() {
+  const leader = Math.max(...oddsCurrent);
+  oddsListEl.innerHTML = state.players.map((player, index) => {
+    const pct = Math.round((oddsCurrent[index] || 0) * 100);
+    const delta = Math.round(((oddsCurrent[index] || 0) - (oddsTurnStart[index] || 0)) * 100);
+    const classes = ['odds-row'];
+    if (index === state.activePlayerIndex && !player.bankrupt) classes.push('is-active');
+    if (player.bankrupt) classes.push('is-out');
+    if (!player.bankrupt && oddsCurrent[index] === leader && leader > 0) classes.push('is-leader');
+    const deltaHtml = player.bankrupt
+      ? '<span class="odds-row__delta">выбыл</span>'
+      : delta
+        ? `<span class="odds-row__delta ${delta > 0 ? 'is-up' : 'is-down'}">${delta > 0 ? '▲' : '▼'} ${Math.abs(delta)}</span>`
+        : '<span class="odds-row__delta"></span>';
+    return `
+      <div class="${classes.join(' ')}" style="--seat-color:${player.color}">
+        <span class="odds-row__token">${player.token}</span>
+        <span class="odds-row__name">${escapeHtml(player.name)}</span>
+        ${deltaHtml}
+        <span class="odds-row__pct">${player.bankrupt ? '—' : `${pct}%`}</span>
+        <span class="odds-row__bar"><i style="width:${player.bankrupt ? 0 : pct}%"></i></span>
+      </div>`;
+  }).join('');
 }
 
 const DICE_PATTERNS = {
@@ -1524,13 +1590,13 @@ function unlockSpeech() {
   synth.speak(warm);
 }
 
-function speakText(text) {
+function speakText(text, { rate = 0.95, pitch = 0.75 } = {}) {
   const synth = window.speechSynthesis;
   if (!synth) return;
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'ru-RU';
-  utter.rate = 0.95;
-  utter.pitch = 0.75;
+  utter.rate = rate;
+  utter.pitch = pitch;
   const voice = pickRussianVoice();
   if (voice) utter.voice = voice;
   synth.cancel();
@@ -1738,6 +1804,55 @@ function finishLokhTurn(player) {
   const line = pickUnusedLine(LOKH_BAD_LINES, usedLokhLines);
   pushComment(player, line, { echoLog: false });
   speakText(line);
+}
+
+const MART_MEME_LINES = [
+  'Ничего не понял, но очень интересно.',
+  'Окак.',
+  'А что, так можно было?',
+  'Денег нет, но вы держитесь.',
+  'Это база.',
+  'Как тебе такое, Илон Маск?',
+  'Красиво жить не запретишь.',
+  'Ты кто такой? Давай, до свидания!',
+  'Я просто кот. Я ничего не решаю.',
+  'Хорошо сидим.',
+  'Ой, всё.',
+  'Жиза.',
+  'Учись, студент.',
+  'Я в своём познании настолько преисполнился…',
+];
+
+const LOKH_MEME_LINES = [
+  'Это фиаско, братан.',
+  'Совпадение? Не думаю.',
+  'Штирлиц был близок к провалу.',
+  'Всё пропало, гипс снимают, клиент уезжает!',
+  'Галя, у нас отмена!',
+  'Хьюстон, у нас проблемы.',
+  'Меня терзают смутные сомнения.',
+  'Я не трус, но я боюсь.',
+  'Надо было брать биткоин в десятом году.',
+  'Тут помню, тут не помню.',
+  'Я же говорил. Меня никто не слушает.',
+  'Это норма? Это не норма.',
+  'Кря. В смысле — всё под контролем.',
+];
+
+const MEME_CHANCE = 0.35;
+const MART_VOICE = { rate: 1.2, pitch: 1.9 };
+const LOKH_VOICE = { rate: 0.9, pitch: 0.6 };
+
+function sayRandomMeme(player) {
+  if (player.bankrupt || Math.random() >= MEME_CHANCE) return;
+  // Лох уже пожаловался вслух после плохого хода — не перебиваем.
+  if (isUnluckySmart(player) && (botTurnBad || lokhTurnAfraid)) return;
+  const pool = isLuckyFool(player) ? MART_MEME_LINES : isUnluckySmart(player) ? LOKH_MEME_LINES : null;
+  if (!pool) return;
+  const line = pickUnusedLine(pool, usedMemeLines);
+  pushComment(player, line, { echoLog: true });
+  // Март — писклявый и быстрый кот, Лох — низкий и неуверенный.
+  speakText(line, isLuckyFool(player) ? MART_VOICE : LOKH_VOICE);
 }
 
 function clearComments() {
@@ -3467,6 +3582,7 @@ async function runBotTurn() {
   if (gameGen !== gen) return;
   finishMartTurn(player);
   finishLokhTurn(player);
+  sayRandomMeme(player);
   finishAshotTurn(player);
   finishMamaTurn(player);
   if (state.winnerId != null) return;
@@ -4527,6 +4643,7 @@ function buildAshotTrade(ashot, skipIds = []) {
 }
 
 async function botTryTrade(player) {
+  if (state.tradeOffered) return;
   if (isAshot(player) && ashotWantsToTrade(player)) {
     ashotMaybeFormCoalition(player);
     const skipIds = [];
@@ -4565,8 +4682,10 @@ async function botTryTrade(player) {
       rounds += 1;
     }
 
+    planned.splice(1);
     const deals = planned.map((item) => item.deal);
     if (deals.length) {
+      state.tradeOffered = true;
       deals.forEach((deal) => setLog(`${player.name} предлагает сделку ${deal.to.name}.`));
       humanOfferTotal = deals.filter((deal) => !isBot(deal.to)).length;
       humanOfferIndex = 0;
@@ -4585,13 +4704,14 @@ async function botTryTrade(player) {
   if (isMiron(player) && mironWantsToTrade(player)) {
     const skipIds = [];
     const planned = [];
-    while (planned.length < 3) {
+    while (planned.length < 1) {
       const next = buildMironTrade(player, skipIds);
       if (!next) break;
       planned.push(next);
       next.giveCells.concat(next.getCells).forEach((cell) => skipIds.push(cell.id));
     }
     if (planned.length) {
+      state.tradeOffered = true;
       addComment(player, pickUnusedLine(MIRON_TRADE_OFFERS, usedMironTradeLines));
       planned.forEach((deal) => setLog(`${player.name} предлагает сделку ${deal.to.name}.`));
       await resolveTradeBatch(planned);
@@ -4602,6 +4722,7 @@ async function botTryTrade(player) {
   if (isMama(player) && mamaWantsToTrade(player)) {
     const deal = buildMamaTrade(player);
     if (deal) {
+      state.tradeOffered = true;
       setLog(`${player.name} предлагает сделку ${deal.to.name}.`);
       await resolveTrade(deal);
     }
@@ -4614,6 +4735,7 @@ async function botTryTrade(player) {
     if (deal) pushComment(player, pickUnusedLine(MART_TRADE_OFFERS, usedMartTradeLines), { echoLog: false });
   }
   if (!deal) return;
+  state.tradeOffered = true;
   setLog(`${player.name} предлагает сделку ${deal.to.name}.`);
   await resolveTrade(deal);
 }
@@ -5081,6 +5203,7 @@ async function showTradeModal(player) {
       error = validateTrade(deal);
       if (error) continue;
       closeModal();
+      state.tradeOffered = true;
       await resolveTrade(deal);
       break;
     }
@@ -5092,6 +5215,10 @@ async function handleTrade() {
   if (state.busy || state.winnerId != null) return;
   const player = getActivePlayer();
   if (isBot(player)) return;
+  if (state.tradeOffered) {
+    setLog('За ход можно сделать только одно предложение обмена.');
+    return;
+  }
   state.busy = true;
   updateActionButtons();
   await showTradeModal(player);
@@ -5627,6 +5754,7 @@ async function startTurn() {
   state.consecutiveDoubles = 0;
   clearExtraRoll();
   state.rolledOutOfJail = false;
+  state.tradeOffered = false;
   state.turnPhase = 'pre-roll';
   resetHouseBuyCredit();
   refreshUI();
