@@ -87,6 +87,7 @@ function raiseCash(sim, playerIndex, creditor) {
 
   sim.alive[playerIndex] = false;
   sim.aliveCount -= 1;
+  sim.out.push(playerIndex);
   mine.forEach((id) => {
     sim.houses[id] = 0;
     if (creditor != null) {
@@ -173,32 +174,43 @@ function rollout(base, startIndex, rng) {
     owner: base.owner.slice(),
     houses: base.houses.slice(),
     mortgaged: base.mortgaged.slice(),
+    out: [],
   };
   const count = sim.money.length;
-  for (let round = 0; round < ROUNDS && sim.aliveCount > 1; round += 1) {
+  let round = 0;
+  for (; round < ROUNDS && sim.aliveCount > 1; round += 1) {
     for (let step = 0; step < count && sim.aliveCount > 1; step += 1) {
       const index = (startIndex + step) % count;
       if (sim.alive[index]) playTurn(sim, index, rng);
     }
   }
-  if (sim.aliveCount === 1) return sim.alive.indexOf(true);
-
-  let best = -1;
-  let bestWorth = -Infinity;
-  for (let index = 0; index < count; index += 1) {
-    if (!sim.alive[index]) continue;
-    const value = worth(sim, index) + rng();
-    if (value > bestWorth) {
-      bestWorth = value;
-      best = index;
-    }
+  if (sim.aliveCount === 1) {
+    return { winner: sim.alive.indexOf(true), out: sim.out, rounds: round, finished: true };
   }
-  return best;
+
+  // Партия не доиграна за горизонт — места оставшихся по капиталу.
+  const standing = [];
+  for (let index = 0; index < count; index += 1) {
+    if (sim.alive[index]) standing.push({ index, value: worth(sim, index) + rng() });
+  }
+  standing.sort((a, b) => a.value - b.value);
+  return {
+    winner: standing.length ? standing[standing.length - 1].index : -1,
+    out: sim.out.concat(standing.slice(0, -1).map((item) => item.index)),
+    rounds: round,
+    finished: false,
+  };
 }
 
 // players: [{ money, position, inJail, bankrupt }], titles: { [cellId]: { ownerId, houses, mortgaged } }
 // Возвращает массив долей (0..1) по индексам players.
 export function estimateWinOdds(players, titles, activeIndex = 0, seed = 1) {
+  return simulateOutlook(players, titles, activeIndex, seed).wins;
+}
+
+// Полный прогноз: доли побед, шанс вылететь первым, среднее место
+// (1 — победа) и через сколько кругов партия обычно заканчивается.
+export function simulateOutlook(players, titles, activeIndex = 0, seed = 1) {
   const size = BOARD.length;
   const base = {
     money: players.map((player) => player.money),
@@ -218,17 +230,38 @@ export function estimateWinOdds(players, titles, activeIndex = 0, seed = 1) {
     base.mortgaged[id] = Boolean(title.mortgaged);
   });
 
-  const wins = new Array(players.length).fill(0);
+  const count = players.length;
+  const wins = new Array(count).fill(0);
+  const firstOut = new Array(count).fill(0);
+  const placeSum = new Array(count).fill(0);
   if (base.aliveCount <= 1) {
     const winner = base.alive.indexOf(true);
     if (winner >= 0) wins[winner] = 1;
-    return wins;
+    return { wins, firstOut, place: wins.map((value) => (value ? 1 : count)), rounds: 0, finishedShare: 1 };
   }
 
   const rng = makeRng(seed);
+  const finishedRounds = [];
   for (let run = 0; run < ROLLOUTS; run += 1) {
-    const winner = rollout(base, activeIndex, rng);
-    if (winner >= 0) wins[winner] += 1;
+    const result = rollout(base, activeIndex, rng);
+    if (result.winner >= 0) {
+      wins[result.winner] += 1;
+      placeSum[result.winner] += 1;
+    }
+    const fresh = result.out.filter((index) => base.alive[index]);
+    if (fresh.length) firstOut[fresh[0]] += 1;
+    // Последний вылетевший занимает 2-е место, первый — последнее среди живых.
+    fresh.forEach((index, order) => {
+      placeSum[index] += base.aliveCount - order;
+    });
+    if (result.finished) finishedRounds.push(result.rounds);
   }
-  return wins.map((count) => count / ROLLOUTS);
+  finishedRounds.sort((a, b) => a - b);
+  return {
+    wins: wins.map((value) => value / ROLLOUTS),
+    firstOut: firstOut.map((value) => value / ROLLOUTS),
+    place: placeSum.map((value, index) => (base.alive[index] ? value / ROLLOUTS : count)),
+    rounds: finishedRounds.length ? finishedRounds[Math.floor(finishedRounds.length / 2)] : null,
+    finishedShare: finishedRounds.length / ROLLOUTS,
+  };
 }

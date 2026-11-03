@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=PT+Serif:wght@700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=nostradamus" />
+  <link rel="stylesheet" href="styles.css?v=oracle" />
 </head>
 <body>
   <div class="app">
@@ -91,7 +91,9 @@
         </section>
         <section class="nostradamus">
           <button class="btn-nostradamus" id="nostradamus-btn" type="button">🔮 Нострадамус</button>
-          <p class="nostradamus__status" id="nostradamus-status">Соберёт досье партии и скриншот для пророчества Claude.</p>
+          <ol class="prophecy" id="prophecy" hidden></ol>
+          <button class="btn-dossier" id="dossier-btn" type="button">📋 Досье для Claude</button>
+          <p class="nostradamus__status" id="nostradamus-status">Нострадамус зачитает прогноз вслух. «Досье» — для подробного разбора в claude.ai.</p>
         </section>
         <div class="commentary-panel" hidden>
           <div class="commentary-feed" id="commentary-feed" aria-live="polite"></div>
@@ -183,6 +185,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=nostradamus"></script>
+  <script type="module" src="app.js?v=oracle"></script>
 </body>
 </html>

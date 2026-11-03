@@ -23,7 +23,8 @@ import {
   nextCellOfType,
   shuffle,
 } from './board.js';
-import { estimateWinOdds } from './odds.js';
+import { estimateWinOdds, simulateOutlook } from './odds.js';
+import { buildProphecy } from './oracle.js';
 
 function createPlayers(roster = PLAYERS) {
   return roster.map((player, index) => ({
@@ -117,6 +118,8 @@ const continueBtn = document.getElementById('continue-btn');
 const startGameBtn = document.getElementById('start-game-btn');
 const oddsListEl = document.getElementById('odds-list');
 const nostradamusBtn = document.getElementById('nostradamus-btn');
+const dossierBtn = document.getElementById('dossier-btn');
+const prophecyEl = document.getElementById('prophecy');
 const nostradamusStatusEl = document.getElementById('nostradamus-status');
 const commentaryFeedEl = document.getElementById('commentary-feed');
 const commentaryFormEl = document.getElementById('commentary-form');
@@ -480,7 +483,7 @@ function handleContinueGame() {
   hideLobby();
   refreshUI();
   applySavedDice(snapshot.game.lastDice || snapshot.lastDice, snapshot.game.lastDiceTotal || snapshot.lastDiceTotal);
-  setLog(snapshot.log || 'Партия восстановлена с этого компьютера.');
+  setLog(snapshot.log || 'Партия восстановлена с этого компьютера.', { journal: false });
   updateSaveStatus(snapshot.savedAt, `Продолжаем с ${formatSavedAt(snapshot.savedAt)}`);
   resumeBotOrLanding();
 }
@@ -1095,9 +1098,9 @@ function setNostradamusStatus(text) {
   if (nostradamusStatusEl) nostradamusStatusEl.textContent = text;
 }
 
-async function handleNostradamus() {
-  if (!matchActive || !nostradamusBtn) return;
-  nostradamusBtn.disabled = true;
+async function handleDossier() {
+  if (!matchActive || !dossierBtn) return;
+  dossierBtn.disabled = true;
   setNostradamusStatus('Собираю досье…');
   const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
   const text = nostradamusPrompt(buildNostradamusDossier());
@@ -1129,9 +1132,76 @@ async function handleNostradamus() {
   setNostradamusStatus([
     copied ? 'Досье скопировано и скачано.' : 'Досье скачано (буфер обмена недоступен).',
     shot ? 'Скриншот скачан.' : 'Скриншот не получился.',
-    'Вставьте досье в чат с Claude и приложите скриншот — будет пророчество.',
+    'Вставьте досье в разговор с Claude на claude.ai и приложите скриншот.',
   ].join(' '));
-  nostradamusBtn.disabled = false;
+  dossierBtn.disabled = false;
+}
+
+// Оракул на месте: прогноз из симуляции, текст из oracle.js, голос браузера.
+const PROPHECY_VOICE = { rate: 0.92, pitch: 0.7 };
+let prophecySpeaking = false;
+
+function renderProphecy(lines, current) {
+  if (!prophecyEl) return;
+  prophecyEl.hidden = false;
+  prophecyEl.innerHTML = lines
+    .map((line, index) => `<li class="${index === current ? 'is-current' : ''}">${escapeHtml(line)}</li>`)
+    .join('');
+  prophecyEl.querySelector('.is-current')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function setProphecySpeaking(speaking) {
+  prophecySpeaking = speaking;
+  if (nostradamusBtn) nostradamusBtn.textContent = speaking ? '⏹ Замолчать' : '🔮 Нострадамус';
+}
+
+function stopProphecy() {
+  window.speechSynthesis?.cancel();
+  setProphecySpeaking(false);
+}
+
+function prophecySpeech(line) {
+  return line.replace(/₽/g, 'рублей').replace(/«|»/g, '');
+}
+
+function handleNostradamus() {
+  if (!matchActive) return;
+  if (prophecySpeaking) {
+    stopProphecy();
+    return;
+  }
+  const outlook = simulateOutlook(state.players, state.titles, state.activePlayerIndex, Date.now() & 0xffff);
+  const lines = buildProphecy({ players: state.players, titles: state.titles }, outlook);
+  renderProphecy(lines, -1);
+  setNostradamusStatus('');
+
+  const synth = window.speechSynthesis;
+  if (!synth) {
+    setNostradamusStatus('Браузер не умеет говорить — пророчество только текстом.');
+    return;
+  }
+  synth.cancel();
+  synth.resume();
+  const voice = pickRussianVoice();
+  setProphecySpeaking(true);
+  lines.forEach((line, index) => {
+    const utter = new SpeechSynthesisUtterance(prophecySpeech(line));
+    utter.lang = 'ru-RU';
+    utter.rate = PROPHECY_VOICE.rate;
+    utter.pitch = PROPHECY_VOICE.pitch;
+    if (voice) utter.voice = voice;
+    utter.onstart = () => renderProphecy(lines, index);
+    if (index === lines.length - 1) {
+      utter.onend = () => {
+        renderProphecy(lines, -1);
+        setProphecySpeaking(false);
+      };
+    }
+    utter.onerror = () => {
+      if (index === lines.length - 1 || !prophecySpeaking) setProphecySpeaking(false);
+    };
+    synth.speak(utter);
+  });
 }
 
 function renderOdds() {
@@ -1406,8 +1476,8 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;');
 }
 
-function setLog(message) {
-  if (matchActive && message) {
+function setLog(message, { journal = true } = {}) {
+  if (journal && matchActive && message) {
     gameJournal.push({ turn: turnCounter, player: getActivePlayer()?.name || '', text: message });
     if (gameJournal.length > JOURNAL_LIMIT) gameJournal.shift();
   }
@@ -1785,7 +1855,7 @@ function unlockSpeech() {
 
 function speakText(text, { rate = 0.95, pitch = 0.75 } = {}) {
   const synth = window.speechSynthesis;
-  if (!synth) return;
+  if (!synth || prophecySpeaking) return;
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'ru-RU';
   utter.rate = rate;
@@ -6125,6 +6195,7 @@ function init() {
   newGameBtn.addEventListener('click', handleNewGame);
   startGameBtn?.addEventListener('click', handleStartGame);
   nostradamusBtn?.addEventListener('click', handleNostradamus);
+  dossierBtn?.addEventListener('click', handleDossier);
   continueBtn?.addEventListener('click', handleContinueGame);
   commentaryFormEl?.addEventListener('submit', handleChatSubmit);
   commentarySpeakerRowEl?.addEventListener('click', handleSpeakerClick);
