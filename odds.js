@@ -8,7 +8,7 @@ import {
   GO_TO_JAIL_POSITION,
   isTitleCell,
   getMortgageValue,
-} from './board.js';
+} from './board.js?v=k3';
 
 // Шансы на победу как в покерной трансляции: из текущей позиции разыгрываем
 // много коротких упрощённых партий и считаем, кто сколько раз выиграл.

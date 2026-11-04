@@ -22,9 +22,9 @@ import {
   getGroupCells,
   nextCellOfType,
   shuffle,
-} from './board.js';
-import { estimateWinOdds, simulateOutlook } from './odds.js';
-import { buildProphecy } from './oracle.js';
+} from './board.js?v=k3';
+import { estimateWinOdds, simulateOutlook } from './odds.js?v=k3';
+import { buildProphecy } from './oracle.js?v=k3';
 
 function createPlayers(roster = PLAYERS) {
   return roster.map((player, index) => ({

@@ -4,7 +4,7 @@ import {
   RAILROAD_RENT,
   isTitleCell,
   getMortgageValue,
-} from './board.js';
+} from './board.js?v=k3';
 
 // Нострадамус без интернета: читает позицию, берёт прогноз из симуляции
 // и складывает пророчество из фраз. Каждая фраза — отдельная строка,
