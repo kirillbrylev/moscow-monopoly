@@ -404,6 +404,17 @@ export const PLAYER_CATALOG = [
     defaultOn: true,
     blurb: 'мама · копит и считает',
   },
+  {
+    key: 'kiryusha',
+    name: 'Кирюша',
+    token: '🌀',
+    color: '#F9A825',
+    isBot: true,
+    botId: 'kiryusha',
+    botKind: 'kiryusha',
+    defaultOn: true,
+    blurb: 'беспредельщик · всегда 12, телепорт, отжимает улицы',
+  },
 ];
 
 export const PLAYERS = PLAYER_CATALOG

@@ -123,7 +123,57 @@ function build(sim, playerIndex) {
   });
 }
 
+function takeTitle(sim, cellId, toIndex) {
+  const group = BOARD[cellId].group;
+  if (group && BOARD[cellId].type === 'property') GROUP_IDS[group].forEach((id) => { sim.houses[id] = 0; });
+  sim.owner[cellId] = toIndex;
+}
+
+// Кирюша: случайная клетка, отжим/выкуп улиц, деньги из банка, подарки.
+function playChaosTurn(sim, playerIndex, rng) {
+  const position = Math.floor(rng() * BOARD.length);
+  if (position < sim.position[playerIndex]) sim.money[playerIndex] += GO_SALARY;
+  sim.position[playerIndex] = position;
+  const cell = BOARD[position];
+  if (cell.type === 'tax') {
+    pay(sim, playerIndex, cell.amount || 0);
+  } else if (isTitleCell(cell)) {
+    const ownerId = sim.owner[position];
+    if (ownerId == null) {
+      if (sim.money[playerIndex] - cell.price >= BUY_RESERVE) {
+        sim.owner[position] = playerIndex;
+        sim.money[playerIndex] -= cell.price;
+      }
+    } else if (ownerId !== playerIndex && sim.alive[ownerId]) {
+      const roll = rng();
+      if (roll < 0.45) {
+        takeTitle(sim, position, playerIndex);
+      } else if (roll < 0.7) {
+        sim.money[ownerId] += Math.max(0, sim.money[playerIndex]);
+        sim.money[playerIndex] = 0;
+        takeTitle(sim, position, playerIndex);
+      } else if (!sim.mortgaged[position]) {
+        pay(sim, playerIndex, rentFor(sim, position, 12), ownerId);
+      }
+    }
+  }
+  if (!sim.alive[playerIndex]) return;
+  if (rng() < 0.7) sim.money[playerIndex] += 10 * (1 + Math.floor(rng() * 100));
+  if (rng() < 0.3) {
+    const mine = TITLE_IDS.filter((id) => sim.owner[id] === playerIndex);
+    const others = sim.alive.map((alive, index) => (alive && index !== playerIndex ? index : -1)).filter((index) => index >= 0);
+    if (mine.length && others.length) {
+      takeTitle(sim, mine[Math.floor(rng() * mine.length)], others[Math.floor(rng() * others.length)]);
+    }
+  }
+  build(sim, playerIndex);
+}
+
 function playTurn(sim, playerIndex, rng) {
+  if (sim.chaos[playerIndex]) {
+    playChaosTurn(sim, playerIndex, rng);
+    return;
+  }
   if (sim.jail[playerIndex]) {
     sim.jail[playerIndex] = false;
     pay(sim, playerIndex, JAIL_FINE);
@@ -174,6 +224,7 @@ function rollout(base, startIndex, rng) {
     owner: base.owner.slice(),
     houses: base.houses.slice(),
     mortgaged: base.mortgaged.slice(),
+    chaos: base.chaos,
     out: [],
   };
   const count = sim.money.length;
@@ -217,6 +268,7 @@ export function simulateOutlook(players, titles, activeIndex = 0, seed = 1) {
     position: players.map((player) => player.position || 0),
     jail: players.map((player) => Boolean(player.inJail)),
     alive: players.map((player) => !player.bankrupt),
+    chaos: players.map((player) => player.botKind === 'kiryusha'),
     aliveCount: players.filter((player) => !player.bankrupt).length,
     owner: new Array(size).fill(null),
     houses: new Array(size).fill(0),

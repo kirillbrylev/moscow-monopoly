@@ -1150,8 +1150,19 @@ function renderProphecy(lines, current) {
   prophecyEl.querySelector('.is-current')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
+function stopAllClips() {
+  [martSoundPlayers, mamaSoundPlayers, ashotSoundPlayers, memeSoundPlayers].forEach((group) => {
+    Object.values(group).forEach((audio) => {
+      audio.pause();
+      audio.currentTime = 0;
+    });
+  });
+  voiceCurrentDone?.();
+}
+
 function setProphecySpeaking(speaking) {
   prophecySpeaking = speaking;
+  if (!speaking) window.setTimeout(pumpVoice, VOICE_GAP_MS);
   if (nostradamusBtn) nostradamusBtn.textContent = speaking ? '⏹ Замолчать' : '🔮 Нострадамус';
 }
 
@@ -1180,6 +1191,8 @@ function handleNostradamus() {
     setNostradamusStatus('Браузер не умеет говорить — пророчество только текстом.');
     return;
   }
+  clearVoiceQueue();
+  stopAllClips();
   synth.cancel();
   synth.resume();
   const voice = pickRussianVoice();
@@ -1492,7 +1505,7 @@ function clearLog(message) {
 }
 
 function talksInCharacter(player) {
-  return player?.botKind === 'mart' || player?.botKind === 'lokh' || isMiron(player) || isAshot(player) || isMama(player);
+  return isKiryusha(player) || player?.botKind === 'mart' || player?.botKind === 'lokh' || isMiron(player) || isAshot(player) || isMama(player);
 }
 
 function renderCommentary() {
@@ -1527,7 +1540,7 @@ function pushComment(player, text, options = {}) {
 
 function addComment(player, text) {
   if (!player || !text || !talksInCharacter(player)) return;
-  if (isLuckyFool(player) || isUnluckySmart(player) || isAshot(player) || isMama(player)) return;
+  if (isLuckyFool(player) || isUnluckySmart(player) || isAshot(player) || isMama(player) || isKiryusha(player)) return;
   pushComment(player, text, { echoLog: true });
 }
 
@@ -1628,7 +1641,6 @@ const MART_BAD_LINES = [
 ];
 
 const martSoundPlayers = {};
-let martSoundTimer = 0;
 
 function getMartSound(name) {
   if (!martSoundPlayers[name]) {
@@ -1644,21 +1656,8 @@ function preloadMartSounds() {
 }
 
 function playMartClip(name, maxMs) {
-  Object.values(martSoundPlayers).forEach((audio) => {
-    audio.pause();
-    audio.currentTime = 0;
-  });
-  window.clearTimeout(martSoundTimer);
   const audio = getMartSound(name);
-  audio.volume = name === 'purr' || name.startsWith('meow') ? 0.8 : 0.92;
-  const started = audio.play();
-  if (started?.catch) started.catch(() => {});
-  if (maxMs) {
-    martSoundTimer = window.setTimeout(() => {
-      audio.pause();
-      audio.currentTime = 0;
-    }, maxMs);
-  }
+  playAudioVoice(audio, { volume: name === 'purr' || name.startsWith('meow') ? 0.8 : 0.92, maxMs });
 }
 
 function playMartPack(kind) {
@@ -1757,7 +1756,6 @@ const MAMA_CLIP_LINES = {
 const MAMA_MAD_CLIPS = ['not-funny', 'not-related'];
 
 const mamaSoundPlayers = {};
-let mamaSoundTimer = 0;
 
 function getMamaSound(name) {
   if (!mamaSoundPlayers[name]) {
@@ -1773,17 +1771,8 @@ function preloadMamaSounds() {
 }
 
 function playMamaClip(name) {
-  const file = MAMA_SOUND_FILES[name];
-  if (!file) return;
-  window.clearTimeout(mamaSoundTimer);
-  Object.values(mamaSoundPlayers).forEach((audio) => {
-    audio.pause();
-    audio.currentTime = 0;
-  });
-  const audio = getMamaSound(name);
-  audio.volume = 0.92;
-  const started = audio.play();
-  if (started?.catch) started.catch(() => {});
+  if (!MAMA_SOUND_FILES[name]) return;
+  playAudioVoice(getMamaSound(name), { volume: 0.92 });
 }
 
 function mamaSay(name) {
@@ -1853,18 +1842,100 @@ function unlockSpeech() {
   synth.speak(warm);
 }
 
-function speakText(text, { rate = 0.95, pitch = 0.75 } = {}) {
+// Общая очередь голосов: реплики игроков звучат по одной, а не поверх друг друга.
+// Устаревшие (ждали дольше VOICE_STALE_MS) выкидываем, чтобы голос не отставал от игры.
+const VOICE_QUEUE_MAX = 3;
+const VOICE_STALE_MS = 7000;
+const VOICE_GAP_MS = 220;
+const voiceQueue = [];
+let voiceBusy = false;
+let voiceCurrentDone = null;
+
+function enqueueVoice(start) {
+  if (prophecySpeaking) return;
+  voiceQueue.push({ start, at: Date.now() });
+  while (voiceQueue.length > VOICE_QUEUE_MAX) voiceQueue.shift();
+  pumpVoice();
+}
+
+function clearVoiceQueue() {
+  voiceQueue.length = 0;
+}
+
+function pumpVoice() {
+  if (voiceBusy || prophecySpeaking) return;
+  let item = voiceQueue.shift();
+  while (item && Date.now() - item.at > VOICE_STALE_MS) item = voiceQueue.shift();
+  if (!item) return;
+  voiceBusy = true;
+  let finished = false;
+  let guard = 0;
+  const done = () => {
+    if (finished) return;
+    finished = true;
+    window.clearTimeout(guard);
+    voiceBusy = false;
+    voiceCurrentDone = null;
+    window.setTimeout(pumpVoice, VOICE_GAP_MS);
+  };
+  // Страховка: если браузер не прислал «закончил», не вешаем очередь.
+  guard = window.setTimeout(done, 9000);
+  voiceCurrentDone = done;
+  try {
+    item.start(done);
+  } catch {
+    done();
+  }
+}
+
+function playAudioVoice(audio, { volume = 0.92, maxMs = 0, onFail = null } = {}) {
+  if (!audio) return;
+  enqueueVoice((done) => {
+    let timer = 0;
+    const end = () => {
+      window.clearTimeout(timer);
+      audio.onended = null;
+      audio.onerror = null;
+      done();
+    };
+    audio.pause();
+    audio.currentTime = 0;
+    audio.volume = volume;
+    audio.onended = end;
+    audio.onerror = () => (onFail ? (audio.onerror = null, onFail(end)) : end());
+    if (maxMs) {
+      timer = window.setTimeout(() => {
+        audio.pause();
+        audio.currentTime = 0;
+        end();
+      }, maxMs);
+    }
+    const started = audio.play();
+    if (started?.catch) started.catch(() => (onFail ? onFail(end) : end()));
+  });
+}
+
+function speakNow(text, { rate = 0.95, pitch = 0.75 } = {}, done = () => {}) {
   const synth = window.speechSynthesis;
-  if (!synth || prophecySpeaking) return;
+  if (!synth || !text) {
+    done();
+    return;
+  }
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'ru-RU';
   utter.rate = rate;
   utter.pitch = pitch;
   const voice = pickRussianVoice();
   if (voice) utter.voice = voice;
-  synth.cancel();
+  utter.onend = done;
+  utter.onerror = done;
   synth.resume();
-  window.setTimeout(() => synth.speak(utter), 40);
+  synth.speak(utter);
+}
+
+function speakText(text, options = {}) {
+  if (!window.speechSynthesis || !text) return;
+  enqueueVoice((done) => speakNow(text, options, done));
 }
 
 const ASHOT_PRODUCE = ['помидоры', 'персики', 'виноград', 'огурцы', 'арбуз', 'зелень', 'гранат'];
@@ -1921,13 +1992,7 @@ function preloadAshotSounds() {
 function playAshotClip(line) {
   const audio = getAshotSound(line);
   if (!audio) return false;
-  Object.values(ashotSoundPlayers).forEach((item) => {
-    item.pause();
-    item.currentTime = 0;
-  });
-  audio.volume = 0.92;
-  const started = audio.play();
-  if (started?.catch) started.catch(() => {});
+  playAudioVoice(audio, { volume: 0.92 });
   return true;
 }
 
@@ -1935,16 +2000,7 @@ function speakAshot(text) {
   if (!text) return;
   ashotSpokeThisTurn = true;
   if (playAshotClip(text)) return;
-  const synth = window.speechSynthesis;
-  if (!synth) return;
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.lang = 'ru-RU';
-  utter.rate = 0.86;
-  utter.pitch = 1.12;
-  const voice = pickRussianVoice();
-  if (voice) utter.voice = voice;
-  synth.cancel();
-  window.setTimeout(() => synth.speak(utter), 40);
+  speakText(text, { rate: 0.86, pitch: 1.12 });
 }
 
 function ashotProduceName() {
@@ -2141,14 +2197,9 @@ function playMemeClip(player, line) {
   const file = memeClipPath(player, line);
   if (!file) return false;
   const audio = memeSoundPlayers[file] || (memeSoundPlayers[file] = new Audio(file));
-  Object.values(memeSoundPlayers).forEach((item) => {
-    item.pause();
-    item.currentTime = 0;
-  });
-  audio.volume = 0.95;
-  const started = audio.play();
-  // Нет файла или браузер не дал играть — говорим голосом браузера.
-  if (started?.catch) started.catch(() => speakText(line, isLuckyFool(player) ? MART_VOICE : LOKH_VOICE));
+  const voice = isLuckyFool(player) ? MART_VOICE : LOKH_VOICE;
+  // Нет файла или браузер не дал играть — говорим голосом браузера в том же слоте очереди.
+  playAudioVoice(audio, { volume: 0.95, onFail: (done) => speakNow(line, voice, done) });
   return true;
 }
 
@@ -2160,9 +2211,7 @@ function sayRandomMeme(player) {
   if (!pool) return;
   const line = pickUnusedLine(pool, usedMemeLines);
   pushComment(player, line, { echoLog: true });
-  // Март говорит после своего звука, иначе фразу не слышно.
-  if (isLuckyFool(player)) window.setTimeout(() => playMemeClip(player, line), 1300);
-  else playMemeClip(player, line);
+  playMemeClip(player, line);
 }
 
 function clearComments() {
@@ -2219,6 +2268,128 @@ const MAMA_LUCK = 0.7;
 function usesLuckBias(player) {
   if (!player || isMiron(player) || isAshot(player)) return false;
   return player.botKind === 'mart' || player.botKind === 'lokh' || isMama(player);
+}
+
+// ——— Кирюша-беспредельщик ———
+// Всегда выкидывает 12 (без дубля), прыгает на случайную клетку,
+// отжимает улицы, раздаёт свои и грабит банк.
+const KIRYUSHA_VOICE = { rate: 1.3, pitch: 1.35 };
+const KIRYUSHA_STEAL_CHANCE = 0.45;
+const KIRYUSHA_BUYOUT_CHANCE = 0.25;
+const KIRYUSHA_BANK_CHANCE = 0.7;
+const KIRYUSHA_BANK_MAX = 1000;
+const KIRYUSHA_GIFT_CHANCE = 0.3;
+
+const KIRYUSHA_LINES = {
+  roll: ['Двенадцать. Как всегда.', 'Кубики меня боятся.', 'Опять двенадцать, удивлены?', 'Кидаю не глядя.'],
+  jump: ['Куда хочу, туда и хожу!', 'Телепорт, детка!', 'Круг? Какой ещё круг?', 'Я везде и сразу.'],
+  steal: ['Это теперь моё!', 'Было ваше, стало наше.', 'Отжал, и что ты сделаешь?', 'Спасибо за подарок!'],
+  buyout: ['Держи все мои деньги, улица моя!', 'Деньги — мусор, мне нужна улица.', 'Забирай кэш, давай ключи.'],
+  bank: ['Банк, открывай!', 'Касса, я пришёл.', 'Беру сколько унесу.', 'Это не грабёж, это бонус.'],
+  gift: ['Держи, мне не жалко!', 'Дарю! От сердца, почти.', 'Забирай, мне надоела.'],
+  jail: ['Тюрьма? Не, не слышал.', 'Меня не сажают, я сам сажаю.'],
+};
+
+function isKiryusha(player) {
+  return player?.botKind === 'kiryusha' || player?.botId === 'kiryusha';
+}
+
+function kiryushaSay(player, kind) {
+  const pool = KIRYUSHA_LINES[kind];
+  if (!pool) return;
+  const line = pool[Math.floor(Math.random() * pool.length)];
+  pushComment(player, line, { echoLog: false });
+  speakText(line, KIRYUSHA_VOICE);
+}
+
+function randomOtherPlayer(player) {
+  const others = state.players.filter((item) => item.id !== player.id && !item.bankrupt);
+  return others.length ? others[Math.floor(Math.random() * others.length)] : null;
+}
+
+// При смене хозяина улицы монополия рушится — дома в группе сносятся (в банк, без денег).
+function demolishGroup(cell) {
+  if (!cell.group || cell.type !== 'property') return 0;
+  let removed = 0;
+  getGroupCells(cell.group).forEach((item) => {
+    const title = state.titles[item.id];
+    if (!title?.houses) return;
+    if (title.houses === 5) state.bank.hotels += 1;
+    else state.bank.houses += title.houses;
+    removed += title.houses;
+    title.houses = 0;
+  });
+  return removed;
+}
+
+function moveTitle(cell, toPlayer) {
+  const removed = demolishGroup(cell);
+  state.titles[cell.id].ownerId = toPlayer.id;
+  return removed;
+}
+
+async function kiryushaJump(player) {
+  let target = Math.floor(Math.random() * BOARD.length);
+  if (target === player.position) target = (target + 1 + Math.floor(Math.random() * (BOARD.length - 1))) % BOARD.length;
+  const passedGo = target < player.position;
+  player.position = target;
+  if (passedGo) {
+    addMoney(player, GO_SALARY);
+    setLog(`${player.name} пролетает «Вперёд» и получает ₽ ${GO_SALARY}`);
+  }
+  renderTokens(player.id);
+  renderPlayerCards();
+  setLog(`${player.name} телепортируется на «${getCellByPosition(target).name}».`);
+  kiryushaSay(player, 'jump');
+  await sleep(700);
+}
+
+// true — Кирюша разобрался с чужой улицей сам, обычная аренда не нужна.
+async function kiryushaLanding(player) {
+  const cell = getCellByPosition(player.position);
+  if (!isTitleCell(cell)) return false;
+  const title = state.titles[cell.id];
+  if (title.ownerId == null || title.ownerId === player.id) return false;
+  const owner = state.players.find((item) => item.id === title.ownerId);
+  const roll = Math.random();
+  if (roll < KIRYUSHA_STEAL_CHANCE) {
+    const removed = moveTitle(cell, player);
+    setLog(`${player.name} отжимает «${cell.name}» у ${owner.name} бесплатно${removed ? ' и сносит дома' : ''}.`);
+    kiryushaSay(player, 'steal');
+  } else if (roll < KIRYUSHA_STEAL_CHANCE + KIRYUSHA_BUYOUT_CHANCE) {
+    const cash = Math.max(0, player.money);
+    payBetween(player, owner, cash);
+    const removed = moveTitle(cell, player);
+    setLog(`${player.name} отдаёт ${owner.name} все деньги (₽ ${formatMoney(cash)}) и забирает «${cell.name}»${removed ? ', дома снесены' : ''}.`);
+    kiryushaSay(player, 'buyout');
+  } else {
+    return false;
+  }
+  refreshUI();
+  await sleep(600);
+  return true;
+}
+
+async function kiryushaMayhem(player) {
+  if (player.bankrupt || state.winnerId != null) return;
+  if (Math.random() < KIRYUSHA_BANK_CHANCE && state.bank.money > 0) {
+    const amount = Math.min(state.bank.money, 10 * (1 + Math.floor(Math.random() * (KIRYUSHA_BANK_MAX / 10))));
+    addMoney(player, amount);
+    setLog(`${player.name} залезает в банк и берёт ₽ ${formatMoney(amount)}.`);
+    kiryushaSay(player, 'bank');
+    refreshUI();
+    await sleep(600);
+  }
+  const mine = BOARD.filter((cell) => isTitleCell(cell) && state.titles[cell.id]?.ownerId === player.id);
+  const lucky = randomOtherPlayer(player);
+  if (mine.length && lucky && Math.random() < KIRYUSHA_GIFT_CHANCE) {
+    const cell = mine[Math.floor(Math.random() * mine.length)];
+    const removed = moveTitle(cell, lucky);
+    setLog(`${player.name} дарит «${cell.name}» игроку ${lucky.name}${removed ? ' (дома снесены)' : ''}.`);
+    kiryushaSay(player, 'gift');
+    refreshUI();
+    await sleep(600);
+  }
 }
 
 function isMama(player) {
@@ -2862,6 +3033,7 @@ async function botsReact(event) {
 }
 
 function rollDiceFor(player) {
+  if (isKiryusha(player)) return [6, 6];
   let first = rollDie();
   let second = rollDie();
   if (!usesLuckBias(player)) return [first, second];
@@ -3870,6 +4042,8 @@ async function runBotTurn() {
               ? 'Кидаю. Потом посмотрим, у кого что купить.'
               : isMiron(player)
                 ? 'Кубики не умеют врать. Люди — сколько угодно.'
+                : isKiryusha(player)
+                  ? 'Ща всем будет весело.'
                 : 'Считаю бросок.');
         if (!botTurnAlive(gen, player) || !isBot(player)) break;
         await handleRoll();
@@ -5757,6 +5931,12 @@ async function movePlayerSteps(player, steps) {
 }
 
 async function sendToJail(player) {
+  if (isKiryusha(player)) {
+    setLog(`${player.name} должен сесть в тюрьму, но просто уходит.`);
+    kiryushaSay(player, 'jail');
+    await sleep(350);
+    return;
+  }
   markBotTurnBad(player);
   player.position = JAIL_POSITION;
   player.inJail = true;
@@ -6109,7 +6289,9 @@ async function handleRoll() {
 
   const dice = rollDiceFor(player);
   const total = dice[0] + dice[1];
-  const isDoubles = dice[0] === dice[1];
+  const chaos = isKiryusha(player);
+  // У Кирюши 6+6 — не дубль: иначе он ходил бы вечно и садился за три дубля.
+  const isDoubles = !chaos && dice[0] === dice[1];
 
   await animateDiceRoll(dice);
   state.lastDice = dice;
@@ -6133,12 +6315,15 @@ async function handleRoll() {
 
   setLog(`${player.name} бросает кубики: ${dice[0]} и ${dice[1]}, сумма ${total}.`);
   addComment(player, diceThought(player, dice, total));
+  if (chaos) kiryushaSay(player, 'roll');
   await sleep(isBot(player) ? 560 : 280);
   await botsReact({ type: 'roll', actor: player, dice, total });
-  await movePlayer(player, total);
+  if (chaos) await kiryushaJump(player);
+  else await movePlayer(player, total);
   state.turnPhase = 'resolve-land';
   persistGame();
-  await resolveLanding(player);
+  if (!(chaos && await kiryushaLanding(player))) await resolveLanding(player);
+  if (chaos) await kiryushaMayhem(player);
 
   grantExtraRoll(player, isDoubles);
   state.rolledOutOfJail = false;
