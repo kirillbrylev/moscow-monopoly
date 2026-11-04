@@ -1151,7 +1151,7 @@ function renderProphecy(lines, current) {
 }
 
 function stopAllClips() {
-  [martSoundPlayers, mamaSoundPlayers, ashotSoundPlayers, memeSoundPlayers].forEach((group) => {
+  [martSoundPlayers, mamaSoundPlayers, ashotSoundPlayers, memeSoundPlayers, kiryushaSoundPlayers].forEach((group) => {
     Object.values(group).forEach((audio) => {
       audio.pause();
       audio.currentTime = 0;
@@ -2273,7 +2273,7 @@ function usesLuckBias(player) {
 // ——— Кирюша-беспредельщик ———
 // Всегда выкидывает 12 (без дубля), прыгает на случайную клетку,
 // отжимает улицы, раздаёт свои и грабит банк.
-const KIRYUSHA_VOICE = { rate: 1.3, pitch: 1.35 };
+const KIRYUSHA_VOICE = { rate: 1.25, pitch: 2 };
 const KIRYUSHA_STEAL_CHANCE = 0.45;
 const KIRYUSHA_BUYOUT_CHANCE = 0.25;
 const KIRYUSHA_BANK_CHANCE = 0.7;
@@ -2297,10 +2297,16 @@ function isKiryusha(player) {
 function kiryushaSay(player, kind) {
   const pool = KIRYUSHA_LINES[kind];
   if (!pool) return;
-  const line = pool[Math.floor(Math.random() * pool.length)];
+  const index = Math.floor(Math.random() * pool.length);
+  const line = pool[index];
   pushComment(player, line, { echoLog: false });
-  speakText(line, KIRYUSHA_VOICE);
+  // Записанный детский голос; нет файла — говорит браузер, тоже повыше.
+  const file = `sounds/kiryusha/${kind}-${String(index + 1).padStart(2, '0')}.mp3`;
+  const audio = kiryushaSoundPlayers[file] || (kiryushaSoundPlayers[file] = new Audio(file));
+  playAudioVoice(audio, { volume: 0.95, onFail: (done) => speakNow(line, KIRYUSHA_VOICE, done) });
 }
+
+const kiryushaSoundPlayers = {};
 
 function randomOtherPlayer(player) {
   const others = state.players.filter((item) => item.id !== player.id && !item.bankrupt);
